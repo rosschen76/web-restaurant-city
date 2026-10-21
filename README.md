@@ -81,7 +81,7 @@ js/
   art_world.js        地板／牆壁／全部家具的程式化像素美術
   art_people.js       人物、菜色圖示、UI 圖示、特效
   render.js           Canvas 繪圖：低解析度緩衝 + 整數倍放大、深度排序、點擊判定
-  audio.js            WebAudio 音效與 8-bit 背景音樂
+  audio.js            WebAudio 音效與自創 bossa nova 背景音樂（全部即時合成）
   ui.js               HUD、各面板、裝潢模式、輸入
   main.js             啟動、主迴圈、自動存檔
 tests/                邏輯測試（sim / fuzz）與端對端測試（e2e）
