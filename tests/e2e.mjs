@@ -211,6 +211,53 @@ await scenario('音效與音樂是兩個獨立的開關，各自有按鈕、音�
   assert.deepEqual(after, { sfxOn: true, musicOn: false, musicVol: 0.3 });
 });
 
+await scenario('暫停按鈕與空白鍵：按下暫停時間凍結，再按繼續；開著設定時自動暫停，關掉後恢復', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await page.waitForTimeout(300);
+  const snap = () => G(page, () => { const g = window.__game.game; return JSON.stringify([g.s.stats.playTime, g.s.clock, g.customers.map((c) => [c.x, c.y, c.state]), g.crew.map((m) => [m.x, m.y, m.state])]); });
+  assert.equal(await page.locator('#btn-pause').isVisible(), true, 'HUD 有暫停按鈕');
+  assert.equal(await page.locator('#pause').isVisible(), false);
+
+  // 1) 按鈕暫停
+  await page.click('#btn-pause');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true);
+  assert.equal(await page.locator('#pause').isVisible(), true, '要提示已暫停');
+  assert.ok((await page.locator('#pause').innerText()).includes('已暫停'));
+  const a = await snap();
+  await page.waitForTimeout(1200);
+  assert.equal(await snap(), a, '暫停期間任何東西都不動');
+  await page.click('#btn-pause');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+  await page.waitForTimeout(500);
+  assert.notEqual(await snap(), a, '繼續後時間前進');
+
+  // 2) 空白鍵（按完按鈕後仍然有效）
+  await page.keyboard.press('Space');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true);
+  await page.keyboard.press('Space');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+
+  // 3) 設定面板：開著就暫停，關掉就繼續
+  await page.click('.bottom-bar [data-act=open-settings]');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('settings')), true);
+  assert.ok((await page.locator('#pause').innerText()).includes('設定'));
+  const b = await snap();
+  await page.waitForTimeout(1000);
+  assert.equal(await snap(), b, '設定開著時遊戲凍結');
+  await page.keyboard.press('Escape');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+  await page.waitForTimeout(500);
+  assert.notEqual(await snap(), b);
+
+  // 4) 玩家自己按的暫停，不會被「關掉設定」誤解除
+  await page.click('#btn-pause');
+  await page.click('.bottom-bar [data-act=open-settings]');
+  await page.keyboard.press('Escape');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true, '手動暫停仍然保留');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('settings')), false);
+  await page.click('#btn-pause');
+});
+
 await scenario('進入裝潢模式時遊戲時間暫停，離開後恢復', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await page.waitForTimeout(500);
@@ -293,9 +340,11 @@ await scenario('以 3 倍速連續模擬 20 分鐘不出錯，等級成長', asy
   await page.click('[data-act=welcome-ok]');
   await G(page, () => {
     const { game } = window.__game;
+    // 有日夜與排班之後，只靠店掌櫃一人撐不住不斷增加的座位：先請兩位員工
+    game.s.coins = 1e5; game.s.level = 12; game.hire(0); game.hire(0); game.setAutoSchedule(true);
     for (let i = 0; i < 12000; i++) {
       game.update(0.1);
-      if (i % 100 === 0) { game.claimQuest(); game.buyFurniture('chair_wood'); }
+      if (i % 100 === 0) { game.claimQuest(); game.s.coins = Math.max(game.s.coins, 1e4); game.buyFurniture('chair_wood'); }
     }
   });
   await page.waitForTimeout(300);

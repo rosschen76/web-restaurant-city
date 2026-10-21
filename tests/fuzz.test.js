@@ -91,7 +91,7 @@ for (const seed of [1, 2, 3, 4, 5]) {
     s.coins = 200000;
     s.level = 20;
     for (const id of ['soymilk', 'fantuan', 'luroufan', 'boba', 'xiaolongbao']) s.dishes[id] = { cooked: 0 };
-    const g = new RC.Game(s, { seed });
+    const g = new RC.Game(s, { seed, dayMode: false });
     g.hire(0);
     g.hire(1);
     g.s.room.stage = 2;

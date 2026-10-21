@@ -11,7 +11,7 @@ function mk(items, seed = 1) {
   s.items = [];
   s.nextUid = 1;
   for (const [id, x, y, rot] of items) s.items.push({ uid: s.nextUid++, id, x, y, rot: rot || 0 });
-  return new RC.Game(s, { seed });
+  return new RC.Game(s, { seed, dayMode: false });
 }
 const run = (g, sec, dt = 0.1) => {
   for (let t = 0; t < sec; t += dt) g.update(dt);
@@ -178,7 +178,7 @@ test('沒吃到東西就離開的組別不會留下餐具', () => {
 });
 
 test('離線收益：真實模擬快轉、依效率折算', () => {
-  const g = new RC.Game(RC.state.newGame(RC.util.makeRng(9)), { seed: 9 });
+  const g = new RC.Game(RC.state.newGame(RC.util.makeRng(9)), { seed: 9, dayMode: false });
   let levelEvents = 0;
   g.on('levelup', () => levelEvents++);
   assert.equal(g.catchUp(2), null, '太短不處理');
@@ -198,7 +198,7 @@ test('離線收益：真實模擬快轉、依效率折算', () => {
 });
 
 test('離線收益上限：超過 8 小時只算 8 小時，且速度夠快', () => {
-  const g = new RC.Game(RC.state.newGame(RC.util.makeRng(3)), { seed: 3 });
+  const g = new RC.Game(RC.state.newGame(RC.util.makeRng(3)), { seed: 3, dayMode: false });
   const t0 = Date.now();
   const r = g.catchUp(100 * 3600);
   const ms = Date.now() - t0;

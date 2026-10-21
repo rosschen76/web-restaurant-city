@@ -208,6 +208,8 @@
     cross: ['............', '.kk......kk.', '.krk....krk.', '..krk..krk..', '...krkkrk...', '....krrk....', '...krkkrk...', '..krk..krk..', '.krk....krk.', '.kk......kk.', '............', '............'],
     heart: ['............', '..kk....kk..', '.kppk..kppk.', 'kpwppkkpppk.', 'kppppppppppk', 'kppppppppppk', '.kpppppppk..', '..kpppppk...', '...kpppk....', '....kpk.....', '.....k......', '............'],
     note: ['............', '.....kk.....', '.....kwk....', '.....kwwk...', '.....kwwwk..', '.....kwkwk..', '.....kwk.kk.', '.....kwk....', '..kkkkwk....', '.kwwwkwk....', '.kwwwwwk....', '..kkkkk.....'],
+    pause: ['............', '............', '..kkkk.kkkk.', '..kwwk.kwwk.', '..kwwk.kwwk.', '..kwwk.kwwk.', '..kwwk.kwwk.', '..kwwk.kwwk.', '..kwwk.kwwk.', '..kkkk.kkkk.', '............', '............'],
+    resume: ['............', '..kk........', '..kwkk......', '..kwwwkk....', '..kwwwwwkk..', '..kwwwwwwwk.', '..kwwwwwwwk.', '..kwwwwwkk..', '..kwwwkk....', '..kwkk......', '..kk........', '............'],
     mover: ['.....kk.....', '....kwwk....', '...kkwwkk...', '.....ww.....', '.kk..ww..kk.', 'kwwwwwwwwwwk', 'kwwwwwwwwwwk', '.kk..ww..kk.', '.....ww.....', '...kkwwkk...', '....kwwk....', '.....kk.....'],
   };
   const iconCache = new Map();

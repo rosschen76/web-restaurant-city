@@ -56,6 +56,7 @@
     { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '專業餐廳等級，烹飪速度 ×1.85。' },
     // 功能
     { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
+    { id: 'sink', name: '洗碗槽', cat: 'func', w: 1, h: 1, price: 300, level: 1, appeal: 0, fn: 'sink', desc: '客人用過的餐具要送到這裡，由員工洗乾淨；沒有乾淨的盤子就不能出餐。多一個洗碗槽，可以讓更多人同時洗碗。' },
     { id: 'fridge', name: '冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', desc: '食材取用方便，烹飪時間 -6%（最多 3 台生效）。' },
     // 裝飾
     { id: 'plant_pot', name: '小盆栽', cat: 'decor', w: 1, h: 1, price: 70, level: 1, appeal: 2, desc: '一抹綠意。' },
@@ -123,7 +124,7 @@
   const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
   const maxStaffForLevel = (lv) => Math.min(8, 1 + (lv >= 2) + (lv >= 4) + (lv >= 6) + (lv >= 9) + (lv >= 12) + (lv >= 15) + (lv >= 18));
   const HIRE_BASE = [0, 200, 600, 1500, 3500, 8000, 16000, 30000];
-  const STAFF_XP_STEPS = [0, 12, 30, 60, 100, 160, 240, 340, 460];
+  const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430]; // 最高 10 級
   const FEED_COST = 15;
   const FEED_AMOUNT = 50;
 
@@ -167,6 +168,38 @@
     { id: 'q25', type: 'stars', n: 3, text: '成為三星餐廳（值得專程前往）', reward: 50000 },
   ];
 
+  /* ───────── 天數 / 營業 / 排班 ───────── */
+  const DAY = {
+    hourReal: 25, // 營業中：遊戲內 1 小時 = 真實 25 秒（一天約 10 分鐘）
+    nightFast: 6, // 打烊、店裡沒客人也沒活要做時，時間快轉的倍率
+    defaultOpen: 9, // 預設營業時間 09:00 ~ 17:00（剛好是一個班）
+    defaultClose: 17,
+    shiftHours: 8, // 友善職場：每位員工每天最多上班 8 小時（硬性規定，不能超時）
+    restFullHours: 2, // 離開崗位休息滿 2 小時，體力自動恢復
+    managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
+  };
+
+  /* ───────── 風評 ───────── */
+  // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
+  // 風評一直停在谷底（-10）連續 15 天，餐廳就倒閉、遊戲終止。
+  const REPUTATION = {
+    min: -10,
+    max: 10,
+    happy: 0.1, // 每位客人結帳離開
+    fastBonus: 0.15, // 結帳等得越短，額外加分越多（最多這個值）
+    selfCheckout: 0.04, // 沒人來收、自助結帳
+    angry: -1, // 每組有人氣走
+    walkout: -0.35, // 在門外等不到位子離開
+    turnaway: -0.15, // 候位已滿，客人直接掉頭離開
+    loseDays: 15,
+    warnDays: [1, 5, 10, 13, 14], // 連續幾天谷底時提醒玩家
+    arrivalEffect: 0.03, // 風評每 +1：客人上門速度 +3%（負的就變慢）
+  };
+
+  /* ───────── 餐具 / 洗碗 ───────── */
+  // 盤子總數 = base + 每個座位 perSeat 個；用過的先放在桌上，收拾後送到洗碗槽，洗乾淨才能再用
+  const PLATES = { base: 8, perSeat: 2, washTime: 1.0, dropTime: 0.3 };
+
   /* ───────── 群體客人 / 候位 / 離線收益 ───────── */
   const PARTY_MAX = 4; // 每組人數上限
   const PARTY_WEIGHTS = [40, 30, 18, 12]; // 1~4 人的出現權重
@@ -197,6 +230,6 @@
     maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

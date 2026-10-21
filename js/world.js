@@ -233,6 +233,24 @@
     return stoves;
   }
 
+  /** 找出所有洗碗槽與可站的位置。 */
+  function findSinks(g) {
+    const sinks = [];
+    const F = RC.data.furniture;
+    for (const it of g.items) {
+      const def = F[it.id];
+      if (!def || def.fn !== 'sink') continue;
+      const access = [];
+      for (let d = 0; d < 4; d++) {
+        const nx = it.x + DX[d];
+        const ny = it.y + DY[d];
+        if (walkable(g, nx, ny) && g.reach[ny * g.w + nx]) access.push({ x: nx, y: ny });
+      }
+      if (access.length) sinks.push({ uid: it.uid, id: it.id, x: it.x, y: it.y, access });
+    }
+    return sinks;
+  }
+
   /** 距離 (x,y) 最近的可行走格（BFS），用於把被家具壓到的人移開。 */
   function nearestWalkable(g, x, y) {
     x = Math.max(0, Math.min(g.w - 1, x));
@@ -255,5 +273,5 @@
     return { x: g.door.x, y: g.door.y };
   }
 
-  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, findStoves, nearestWalkable };
+  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, findStoves, findSinks, nearestWalkable };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

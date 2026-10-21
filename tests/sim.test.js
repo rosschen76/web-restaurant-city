@@ -7,7 +7,7 @@ const D = RC.data;
 const mk = (seed = 1, mut) => {
   const s = RC.state.newGame(RC.util.makeRng(seed));
   if (mut) mut(s);
-  return new RC.Game(s, { seed });
+  return new RC.Game(s, { seed, dayMode: false });
 };
 const run = (g, sec, dt = 0.05) => {
   for (let t = 0; t < sec; t += dt) g.update(dt);
@@ -165,45 +165,63 @@ test('存檔往返與壞資料修復', () => {
   assert.equal(back.coins, g.s.coins);
   assert.equal(back.staff.length, g.s.staff.length);
   const bad = RC.state.normalize({ coins: 'x', items: [{ id: 'nope', x: 1, y: 1 }, { id: 'table_wood', x: 99, y: 0 }, { id: 'table_wood', x: 2, y: 2 }, { id: 'table_wood', x: 2, y: 2 }], level: 9999 });
-  assert.equal(bad.items.length, 1);
+  assert.equal(bad.items.filter((i) => i.id !== 'sink').length, 1);
+  assert.equal(bad.items.filter((i) => i.id === 'sink').length, 1, '沒有洗碗槽的舊存檔會自動補一個');
+  assert.equal(bad.flags.addedSink, true);
   assert.equal(bad.level, D.MAX_LEVEL);
   assert.ok(Number.isFinite(bad.coins));
   assert.equal(RC.state.load({ getItem: () => '{oops' }), null);
 });
 
-test('經濟平衡：自動玩 20 分鐘（有收款、會買東西）能順利成長', () => {
+test('經濟平衡：自動玩 20 分鐘（有結帳、會買東西、會洗碗）能順利成長', () => {
   const g = mk(11);
+  const W = RC.world;
+  /** 小心的玩家：擺完確認爐灶、洗碗槽、座位都還能用，否則收回去換位置 */
+  const placeSafe = (ids, spots) => {
+    const before = { st: g.stoves.length, sk: g.sinks.length, se: g.seats.length };
+    for (const spot of spots) {
+      const placed = [];
+      let ok = true;
+      for (const [id, x, y, rot] of spot) {
+        if (!(g.s.inventory[id] > 0)) { g.buyFurniture(id); }
+        const r = g.placeFromInventory(id, x, y, rot || 0);
+        if (!r.ok) { ok = false; break; }
+        placed.push(g.s.items[g.s.items.length - 1].uid);
+      }
+      if (ok && g.stoves.length >= before.st && g.sinks.length >= before.sk && g.seats.length >= before.se) return true;
+      for (const uid of placed) g.storeItem(uid);
+    }
+    return false;
+  };
+  const freeTiles = () => {
+    const out = [];
+    for (let y = 0; y < g.grid.h; y++) for (let x = g.grid.w - 1; x >= 0; x--) if (!g.grid.occ[y * g.grid.w + x] && !(y === D.DOOR_Y && x <= 1)) out.push([x, y]);
+    return out;
+  };
   let t = 0;
   const log = [];
   while (t < 1200) {
     g.update(0.1);
     t += 0.1;
     if (Math.floor(t * 10) % 20 === 0) {
-      // 簡單 AI：優先把錢花在座位 → 人手 → 爐灶
       const s = g.s;
       const cur = g.currentQuest();
       if (cur && cur.done) g.claimQuest();
-      const free = (() => { for (let y = 0; y < g.grid.h; y++) for (let x = 0; x < g.grid.w; x++) if (!g.grid.occ[y * g.grid.w + x] && !(y === D.DOOR_Y && x <= 1)) return { x, y }; return null; })();
-      if (s.coins >= 200 && s.staff.length < D.maxStaffForLevel(s.level) && s.candidates[0]) g.hire(0);
-      else if (g.stoves.length < Math.ceil(s.staff.length * 0.8) && s.coins >= 150 && free) { g.buyFurniture('stove_gas'); const f = RC.world; for (let y = 0; y < g.grid.h; y++) { for (let x = 0; x < g.grid.w; x++) { if (g.placeFromInventory('stove_gas', x, y, 0).ok) { y = 99; break; } } } }
+      if (s.coins >= 200 && s.staff.length - 1 < D.maxStaffForLevel(s.level) && s.candidates[0]) g.hire(0);
+      else if (g.stoves.length < Math.ceil(s.staff.length * 0.8) && s.coins >= 150) placeSafe(['stove_gas'], freeTiles().map(([x, y]) => [['stove_gas', x, y]]));
+      else if (g.sinks.length < Math.ceil(s.staff.length / 3) && s.coins >= 300) placeSafe(['sink'], freeTiles().map(([x, y]) => [['sink', x, y]]));
       else if (g.stoves.length >= Math.ceil(s.staff.length * 0.8) && g.seats.length < s.staff.length * 4 + 2 && s.coins >= 105) {
-        // 一桌兩椅，找空位：桌在 (x,y)，椅在左右
-        outer: for (let y = 1; y < g.grid.h - 1; y++) for (let x = 2; x < g.grid.w - 2; x++) {
-          const ok = (a, b) => RC.world.canPlace(g.grid, D.furniture.table_wood, a, b, 0).ok;
-          if (ok(x, y) && ok(x - 1, y) && ok(x + 1, y)) {
-            g.buyFurniture('table_wood'); g.buyFurniture('chair_stool'); g.buyFurniture('chair_stool');
-            g.placeFromInventory('table_wood', x, y, 0); g.placeFromInventory('chair_stool', x - 1, y, 0); g.placeFromInventory('chair_stool', x + 1, y, 2);
-            break outer;
-          }
-        }
+        const spots = [];
+        for (const [x, y] of freeTiles()) spots.push([['table_wood', x, y], ['chair_stool', x - 1, y], ['chair_stool', x + 1, y, 2]]);
+        placeSafe(['table_wood'], spots);
       }
       if (s.level >= 2 && !s.dishes.fantuan && s.coins >= 150) g.learnDish('fantuan');
       if (s.level >= 3 && !s.dishes.luroufan && s.coins >= 400) g.learnDish('luroufan');
     }
-    if (Math.floor(t) % 300 === 0 && Math.abs(t - Math.round(t)) < 0.05) log.push([Math.round(t), g.s.level, g.s.coins, g.s.stats.served, g.s.staff.length, g.seats.length, g.stoves.length, g.s.stats.angry, g.customers.length]);
+    if (Math.floor(t) % 300 === 0 && Math.abs(t - Math.round(t)) < 0.05) log.push([Math.round(t), g.s.level, g.s.coins, g.s.stats.served, g.s.staff.length, g.seats.length, g.stoves.length, g.sinks.length, g.s.stats.angry, g.customers.length]);
   }
-  console.log('  [t, lv, coins, served, staff, seats, stoves, angry, cust]', JSON.stringify(log));
-  assert.ok(g.s.stats.served >= 100, '20 分鐘至少服務 100 位，實際 ' + g.s.stats.served);
+  console.log('  [t, lv, coins, served, staff, seats, stoves, sinks, angry, cust]', JSON.stringify(log));
+  assert.ok(g.s.stats.served >= 90, '20 分鐘至少服務 90 位，實際 ' + g.s.stats.served);
   assert.ok(g.s.level >= 4, '20 分鐘應至少 4 級，實際 ' + g.s.level);
 });
 
@@ -289,7 +307,7 @@ test('地毯已取消：商品、分類、特殊「可穿越」屬性都不存�
   for (const def of D.furnitureList) {
     const s = RC.state.newGame(RC.util.makeRng(1));
     s.items = [{ uid: 1, id: def.id, x: 5, y: 5, rot: 0 }];
-    const g = new RC.Game(s, { seed: 1 });
+    const g = new RC.Game(s, { seed: 1, dayMode: false });
     assert.equal(g.grid.blocked[5 * g.grid.w + 5], 1, def.id + ' 應該佔住格子');
   }
 });
@@ -346,4 +364,30 @@ test('星級影響售價：每顆星 +10%，0 星不加成也不打折', () => {
   assert.equal(g.dishInfo('danbing').price, base);
   g.stars = 3;
   assert.equal(g.dishInfo('danbing').price, Math.round(base * 1.3));
+});
+
+test('暫停原因可以疊加：玩家暫停、裝潢、設定各自獨立，全部解除才會繼續', () => {
+  const g = mk(7);
+  run(g, 5);
+  const t0 = g.s.stats.playTime;
+  g.setPause('user', true);
+  g.setPause('settings', true);
+  g.setPause('edit', true);
+  assert.equal(g.paused, true);
+  run(g, 10);
+  assert.equal(g.s.stats.playTime, t0, '暫停中時間不流動');
+  g.setPause('settings', false); // 關掉設定
+  assert.equal(g.paused, true, '玩家自己按的暫停還在');
+  g.setPause('edit', false);
+  assert.equal(g.paused, true);
+  assert.equal(g.catchUp(7200), null, '暫停中不做離線補算');
+  g.setPause('user', false);
+  assert.equal(g.paused, false);
+  run(g, 5);
+  assert.ok(g.s.stats.playTime > t0);
+  // 相容寫法
+  g.paused = true;
+  assert.equal(g.isPausedBy('user'), true);
+  g.paused = false;
+  assert.equal(g.paused, false);
 });

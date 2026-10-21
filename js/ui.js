@@ -85,6 +85,7 @@
         <div class="quest-card pbox" id="quest" data-act="open-quest" hidden></div></div>
         <div class="hud-tr">
           <div class="coin-pill pbox" id="coinpill">${ic('coin', 2)}<span id="coins">0</span></div>
+          <button class="btn icon-btn" id="btn-pause" title="暫停／繼續（空白鍵）" aria-label="暫停或繼續"></button>
           <button class="btn icon-btn" id="btn-speed" title="遊戲速度（1 / 2 / 3）">×1</button>
           <button class="btn icon-btn" id="btn-sfx" title="音效開關" aria-label="音效開關"></button>
           <button class="btn icon-btn" id="btn-music" title="音樂開關" aria-label="音樂開關"></button>
@@ -115,12 +116,13 @@
         xplabel: this.hud.querySelector('#xplabel'),
         coins: this.hud.querySelector('#coins'),
         coinpill: this.hud.querySelector('#coinpill'),
+        pause: this.hud.querySelector('#btn-pause'),
         speed: this.hud.querySelector('#btn-speed'),
         sfx: this.hud.querySelector('#btn-sfx'),
         music: this.hud.querySelector('#btn-music'),
         quest: this.hud.querySelector('#quest'),
         warn: this.hud.querySelector('#warn'),
-        pause: this.hud.querySelector('#pause'),
+        pauseBadge: this.hud.querySelector('#pause'),
         bottom: this.hud.querySelector('#bottom'),
         editbar: this.hud.querySelector('#editbar'),
         edithint: this.hud.querySelector('#edithint'),
@@ -138,6 +140,7 @@
 
     refreshHud() {
       const s = this.game.s;
+      const g_ = this.game;
       const need = D.xpForLevel(s.level);
       this.setText(this.el.lv, String(s.level));
       this.setText(this.el.rname, s.name);
@@ -149,6 +152,14 @@
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
       this.setText(this.el.speed, '×' + this.game.speed);
+      // 暫停鈕：玩家手動暫停時顯示「繼續」圖示
+      const pIcon = g_.isPausedBy('user') ? 'resume' : 'pause';
+      if (this.el.pause.dataset.i !== pIcon) {
+        this.el.pause.dataset.i = pIcon;
+        this.el.pause.innerHTML = ic(pIcon, 2);
+      }
+      this.el.pause.classList.toggle('on', g_.isPausedBy('user'));
+      this.updatePauseBadge();
       // 音效與音樂各自一顆按鈕：開著是亮的圖示，關掉是斜線
       const sfxIcon = RC.audio.sfxOn ? 'sound' : 'mute';
       if (this.el.sfx.dataset.i !== sfxIcon) {
@@ -216,7 +227,7 @@
       else if (g.dirty.size >= 3) msg = '桌上的餐具堆積了，雇用更多員工幫忙收桌子吧。';
       else if (g.customers.filter((c) => c.state === 'wait_pay').length >= 3) msg = '好幾位客人等著結帳，掌櫃忙不過來：多雇員工分擔煮菜上菜，讓掌櫃專心收款（也可以買收銀機）。';
       const el = this.el.warn;
-      if (this.edit) {
+      if (this.game.paused) {
         el.hidden = true;
       } else if (msg) {
         this.setText(el, '⚠ ' + msg);
@@ -282,11 +293,33 @@
       });
       this.modalRoot.appendChild(overlay);
       this.panel.overlay = overlay;
+      if (name === 'settings') this.game.setPause('settings', true); // 開著設定時遊戲暫停
       this.renderPanel();
+    }
+
+    /** 玩家按暫停／繼續 */
+    togglePause() {
+      const g = this.game;
+      g.setPause('user', !g.isPausedBy('user'));
+      RC.audio.sfx('click');
+      this.refreshHud();
+    }
+
+    /** 暫停提示：玩家手動暫停 > 設定面板 > 裝潢。 */
+    updatePauseBadge() {
+      const g = this.game;
+      const el = this.el.pauseBadge;
+      let t = '';
+      if (g.isPausedBy('user')) t = '⏸ 已暫停　按 ▶ 或空白鍵繼續';
+      else if (g.isPausedBy('settings')) t = '⏸ 設定中：遊戲時間已暫停';
+      else if (g.isPausedBy('edit')) t = '⏸ 裝潢中：遊戲時間已暫停';
+      el.hidden = !t;
+      if (t) this.setText(el, t);
     }
 
     closePanel(silent) {
       if (!this.panel) return;
+      if (this.panel.name === 'settings') this.game.setPause('settings', false); // 關掉設定，遊戲繼續
       if (this.panel.overlay) this.panel.overlay.remove();
       this.panel = null;
       if (!silent) RC.audio.sfx('click');
@@ -829,9 +862,7 @@
       this.edit = on;
       this.view.edit = on;
       // 裝潢時遊戲時間暫停：客人、員工、計時全部凍結，慢慢擺不怕客人氣走
-      this.game.paused = on;
-      this.el.pause.hidden = !on;
-      if (on) this.el.warn.hidden = true;
+      this.game.setPause('edit', on);
       if (!on) {
         this.cancelPlacing();
         this.deselect();
@@ -843,6 +874,7 @@
       this.el.bottom.hidden = on;
       this.el.editbar.hidden = !on;
       this.updateEditHint();
+      this.updatePauseBadge();
     }
 
     updateEditHint() {
@@ -1013,6 +1045,8 @@
         RC.audio.unlock();
       }, { capture: true });
       document.body.addEventListener('click', (e) => {
+        // 按完按鈕就放掉焦點，否則空白鍵會被按鈕本身吃掉（變成再按一次同一顆按鈕）
+        if (document.activeElement && document.activeElement.tagName === 'BUTTON') document.activeElement.blur();
         const el = e.target.closest('[data-act]');
         if (el && !el.disabled) {
           if (el.classList.contains('off')) return;
@@ -1033,6 +1067,7 @@
         if (!this.pointer) this.hover = { x: -99, y: -99 };
         this.updateGhost();
       });
+      this.el.pause.addEventListener('click', () => this.togglePause());
       this.el.speed.addEventListener('click', () => {
         this.setSpeed(this.game.speed % 3 + 1);
         RC.audio.sfx('click');
@@ -1086,7 +1121,10 @@
         else if (this.edit) this.setEdit(false);
         else if (this.actor) this.act('actor-close');
       } else if (this.panel) return;
-      else if (k === 'e' || k === 'E') this.setEdit(!this.edit);
+      else if (k === ' ' || k === 'Spacebar') {
+        e.preventDefault();
+        this.togglePause();
+      } else if (k === 'e' || k === 'E') this.setEdit(!this.edit);
       else if (k === 'r' || k === 'R') this.rotateSelected();
       else if ((k === 'Delete' || k === 'Backspace') && this.edit) this.storeSelected();
       else if (k === '1' || k === '2' || k === '3') this.setSpeed(+k);
