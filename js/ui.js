@@ -524,7 +524,7 @@
       }
       if (tab === 'data') {
         const txt = esc(RC.state.serialize(s));
-        return `<div class="sub">進度會自動存在這個瀏覽器裡。想換裝置或備份，可以複製下面的存檔文字；在另一台貼上「匯入」即可。</div>
+        return `<div class="sub">進度會自動存在這個瀏覽器裡。想換裝置或備份，可以複製下面的存檔文字（已編碼，不能手動修改）；在另一台貼上「匯入」即可。</div>
           <div class="section-title">匯出</div><textarea id="export" readonly>${txt}</textarea>
           <button class="btn small" data-act="copy-save">複製存檔</button>
           <div class="section-title">匯入</div><textarea id="import" placeholder="把存檔文字貼在這裡"></textarea>

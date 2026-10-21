@@ -203,12 +203,16 @@
     return s;
   }
 
-  function serialize(state) {
-    return JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: Date.now() });
+  /** 存檔字串（已編碼，見 codec.js）。savedAt 可指定，預設為現在。 */
+  function serialize(state, savedAt) {
+    return RC.codec.encode(JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }));
   }
 
+  /** 解析存檔字串；格式不對或被改過會丟出錯誤。匯入玩家貼上的文字時只接受編碼過的格式。 */
   function parse(text, rng) {
-    return normalize(JSON.parse(text), rng);
+    const plain = RC.codec.decode(text);
+    if (plain === null) throw new Error('存檔格式不正確或已被修改');
+    return normalize(JSON.parse(plain), rng);
   }
 
   function getStorage() {
@@ -230,14 +234,29 @@
     }
   }
 
-  /** 讀檔；沒有存檔或壞檔時回傳 null。 */
+  /**
+   * 讀檔；沒有存檔或壞檔時回傳 null。loadStatus 為 'none' | 'ok' | 'corrupt'。
+   * 讀不出來的存檔（損毀或被改過）會備份到另一個鍵再重新開始，不會直接消失。
+   * 相容舊版（編碼機制上線前）的明文 JSON 存檔：讀取後下次存檔就會變成編碼格式。
+   */
   function load(storage, rng) {
+    state.loadStatus = 'none';
     storage = storage || getStorage();
     if (!storage) return null;
+    let text = null;
     try {
-      const text = storage.getItem(SAVE_KEY);
-      return text ? parse(text, rng) : null;
+      text = storage.getItem(SAVE_KEY);
+      if (!text) return null;
+      const st = text.trim().startsWith('{') ? normalize(JSON.parse(text), rng) : parse(text, rng);
+      state.loadStatus = 'ok';
+      return st;
     } catch (e) {
+      state.loadStatus = 'corrupt';
+      try {
+        if (text) storage.setItem(SAVE_KEY + '/corrupt-backup', text);
+      } catch (e2) {
+        /* 備份失敗就算了 */
+      }
       return null;
     }
   }
@@ -251,5 +270,5 @@
     }
   }
 
-  RC.state = { SAVE_KEY, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost };
+  const state = (RC.state = { loadStatus: 'none', SAVE_KEY, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

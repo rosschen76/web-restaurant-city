@@ -90,19 +90,16 @@ await scenario('歡迎視窗可為店掌櫃命名；掌櫃不能被開除', asyn
 
 await scenario('離線收益：離開 2 小時後重新開啟會看到歡迎回來報告', async (page) => {
   await page.click('[data-act=welcome-ok]');
-  await G(page, () => window.RC.state.save(window.__game.game.s));
+  // 存一份「2 小時前」的存檔，並停止頁面自己的存檔，免得關閉時被蓋掉
+  await G(page, () => {
+    window.__game.ui._skipSave = true;
+    localStorage.setItem(window.RC.state.SAVE_KEY, window.RC.state.serialize(window.__game.game.s, Date.now() - 2 * 3600 * 1000));
+  });
   const ctx = page.context();
-  await page.close(); // 關閉時的 pagehide 存檔先完成
+  await page.close();
   const p2 = await ctx.newPage();
   const errs = [];
   p2.on('pageerror', (e) => errs.push(e.message));
-  // 在遊戲腳本執行前，把存檔時間改成 2 小時前
-  await p2.addInitScript(() => {
-    const key = 'pixel-restaurant-city/save';
-    const raw = JSON.parse(localStorage.getItem(key));
-    raw.savedAt = Date.now() - 2 * 3600 * 1000;
-    localStorage.setItem(key, JSON.stringify(raw));
-  });
   await p2.goto(url);
   await p2.waitForSelector('#game');
   const txt = await p2.locator('.win').innerText();

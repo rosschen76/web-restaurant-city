@@ -18,6 +18,7 @@
   RC.audio.musicOn = state.settings.music;
   ui.refreshHud();
   ui.showOffline(offlineReport);
+  if (RC.state.loadStatus === 'corrupt') ui.toast('存檔讀取失敗（可能損毀或被修改過），已重新開始。舊存檔有備份。', 'bad');
 
   // 以菜色圖示當 favicon
   try {
