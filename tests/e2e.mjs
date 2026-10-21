@@ -198,6 +198,27 @@ await scenario('手機尺寸（觸控）可操作並維持版面', async (page) 
   assert.equal(overflow, false, '頁面不應出現水平捲動');
 }, { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true });
 
+await scenario('窄視窗（或文字放大）時，升級視窗與各面板都不出現水平捲軸', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const overflow = () => G(page, () => {
+    const b = document.querySelector('.win-body');
+    return Math.max(b ? b.scrollWidth - b.clientWidth : 0, document.documentElement.scrollWidth - window.innerWidth);
+  });
+  // 升級視窗的標題有跳動動畫，要在動畫的不同時間點量測
+  await G(page, () => { const g = window.__game.game; g.s.level = 9; g.addXp(window.RC.data.xpForLevel(9)); });
+  await page.waitForSelector('[data-act=lvup-ok]');
+  for (let i = 0; i < 10; i++) {
+    assert.equal(await overflow(), 0, '升級視窗第 ' + i + ' 次量測有水平溢出');
+    await page.waitForTimeout(70);
+  }
+  await page.click('[data-act=lvup-ok]');
+  for (const nav of ['open-shop', 'open-menu', 'open-staff', 'open-quest', 'open-settings']) {
+    await page.click(`.bottom-bar [data-act=${nav}]`);
+    assert.equal(await overflow(), 0, nav + ' 面板有水平溢出');
+    await page.keyboard.press('Escape');
+  }
+}, { viewport: { width: 330, height: 520 } });
+
 await browser.close();
 server.close();
 console.log(failed ? `\n${failed} 個情境失敗` : '\n全部端對端情境通過');
