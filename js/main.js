@@ -20,6 +20,8 @@
   RC.audio.musicVol = state.settings.musicVol;
   ui.refreshHud();
   ui.showOffline(offlineReport);
+  // 存檔版次差太多：不讀取，也先不要自動存檔（避免蓋掉舊存檔），等玩家按下「開始新遊戲」
+  if (RC.state.loadStatus === 'incompatible') ui.showVersionBlocked(RC.state.loadInfo);
   if (RC.state.loadStatus === 'corrupt') ui.toast('存檔讀取失敗（可能損毀或被修改過），已重新開始。舊存檔有備份。', 'bad');
 
   // 以菜色圖示當 favicon

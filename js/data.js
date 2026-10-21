@@ -179,6 +179,11 @@
     managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
   };
 
+  /* ───────── 遊戲版次 ───────── */
+  // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
+  // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
+  const GAME_VERSION = { current: 2, maxGap: 2 };
+
   /* ───────── 風評 ───────── */
   // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
   // 風評一直停在谷底（-10）連續 15 天，餐廳就倒閉、遊戲終止。
@@ -230,6 +235,6 @@
     maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
