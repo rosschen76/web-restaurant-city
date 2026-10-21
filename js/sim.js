@@ -16,6 +16,7 @@
   const SERVE_TIME = 0.5;
   const REST_BELOW = 15;
   const REST_UNTIL = 60;
+  const CLEAN_TIME = 1.5; // 收拾一張桌子的時間（秒）
 
   class Game {
     constructor(state, opts) {
@@ -30,6 +31,14 @@
       this.nextCid = 1;
       this.stoveBusy = new Map(); // stove uid -> staff id
       this.seatTaken = new Map(); // chair uid -> customer id
+      this.queue = []; // 門外候位的團體
+      this.parties = []; // 已入座的團體
+      this.tableParty = new Map(); // table uid -> party id（同一張桌子同時只給一組）
+      this.nextPid = 1;
+      this.lastPartySize = 1;
+      this.quiet = false; // 離線快轉時不發事件
+      this.errands = []; // 等著店掌櫃去收的金幣 {key,tx,ty,access}
+      this.dirty = new Map(); // table uid -> {x,y,claimedBy} 客人離席後桌上的餐具
       this.spawnTimer = 3;
       this.autosaveTimer = 0;
       this.rebuild();
@@ -40,7 +49,7 @@
       return this.ev.on(name, fn);
     }
     emit(name, a, b) {
-      this.ev.emit(name, a, b);
+      if (!this.quiet) this.ev.emit(name, a, b);
     }
     toast(msg, kind) {
       this.emit('toast', { msg, kind: kind || 'info' });
@@ -61,6 +70,27 @@
       this.grid = W.buildGrid(s.items, room.w, room.h, D.DOOR_Y);
       this.seats = W.findSeats(this.grid);
       this.seatByChair = new Map(this.seats.map((x) => [x.uid, x]));
+      // 每張桌子的座位數（團體以桌為單位入座）
+      this.tables = new Map();
+      for (const seat of this.seats) {
+        if (!this.tables.has(seat.tableUid)) this.tables.set(seat.tableUid, { uid: seat.tableUid, seats: [] });
+        this.tables.get(seat.tableUid).seats.push(seat);
+      }
+      for (const t of this.tables.values()) {
+        const it = s.items.find((i) => i.uid === t.uid);
+        const fp = W.footprint(RC.data.furniture[it.id], it.rot);
+        t.access = [];
+        for (let dy = 0; dy < fp.h; dy++)
+          for (let dx = 0; dx < fp.w; dx++)
+            for (let d = 0; d < 4; d++) {
+              const nx = it.x + dx + DX[d];
+              const ny = it.y + dy + DY[d];
+              if (W.walkable(this.grid, nx, ny) && this.grid.reach[ny * this.grid.w + nx] && !t.access.some((a) => a.x === nx && a.y === ny)) t.access.push({ x: nx, y: ny });
+            }
+      }
+      this.maxTableCap = 0;
+      for (const t of this.tables.values()) this.maxTableCap = Math.max(this.maxTableCap, t.seats.length);
+      for (const uid of [...this.dirty.keys()]) if (!this.tables.has(uid)) this.dirty.delete(uid);
       this.stoves = W.findStoves(this.grid);
       this.stoveByUid = new Map(this.stoves.map((x) => [x.uid, x]));
       this.recalc();
@@ -100,15 +130,17 @@
       }
       for (const c of this.customers.slice()) {
         if (c.state === 'leave') continue;
+        if (c.state === 'leave') continue;
         const seat = this.seatByChair.get(c.seat);
         if (!seat) {
-          this.sendHome(c, false);
+          this.sendParty(c.party, false);
           continue;
         }
+        if (c.state === 'arrive') continue;
         if (c.state === 'enter') {
           const p = W.findPath(g, Math.floor(c.x), Math.floor(c.y), seat.x, seat.y);
           if (p) c.path = p;
-          else this.sendHome(c, false);
+          else this.sendParty(c.party, false);
         } else {
           c.x = seat.x + 0.5;
           c.y = seat.y + 0.5;
@@ -191,6 +223,7 @@
       const m = {
         rec,
         id: rec.id,
+        boss: !!rec.boss,
         x: spot.x + 0.5,
         y: spot.y + 0.5,
         dir: 0,
@@ -223,6 +256,15 @@
         }
       }
       if (m.stove != null && this.stoveBusy.get(m.stove) === m.id) this.stoveBusy.delete(m.stove);
+      if (m.cleanUid != null) {
+        const d = this.dirty.get(m.cleanUid);
+        if (d && d.claimedBy === m.id) d.claimedBy = null;
+        m.cleanUid = null;
+      }
+      if (m.errand) {
+        this.errands.unshift(m.errand); // 被打斷的收款不要丟掉
+        m.errand = null;
+      }
       m.job = null;
       m.stove = null;
       m.carry = null;
@@ -233,43 +275,108 @@
 
     /* ───────── 客人 ───────── */
 
-    freeSeats() {
-      return this.seats.filter((x) => !this.seatTaken.has(x.uid));
+    queuePeople() {
+      return this.queue.reduce((n, p) => n + p.size, 0);
     }
 
+    /** 抽一個團體人數（不超過餐廳最大桌子的座位數）。 */
+    pickPartySize() {
+      const cap = Math.min(D.PARTY_MAX, this.maxTableCap);
+      const w = D.PARTY_WEIGHTS.slice(0, cap);
+      let r = this.rng.next() * w.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < w.length; i++) {
+        r -= w[i];
+        if (r < 0) return i + 1;
+      }
+      return w.length;
+    }
+
+    /** 一組客人抵達：能立刻入座就入座，否則到門外候位；候位滿了就直接離開。 */
     trySpawn() {
-      if (!this.stoves.length) return false;
-      const free = this.freeSeats();
-      if (!free.length) return false;
-      const g = this.grid;
-      const seat = this.rng.pick(free);
-      const path = W.findPath(g, g.door.x, g.door.y, seat.x, seat.y);
-      if (!path) return false;
+      this.lastPartySize = 1;
+      if (!this.stoves.length || !this.maxTableCap) return false;
+      const size = this.pickPartySize();
+      this.lastPartySize = size;
       const vipChance = clamp(0.015 + this.stars * 0.008, 0, 0.1);
-      const vip = this.s.level >= 3 && this.rng.chance(vipChance);
-      const c = {
-        id: this.nextCid++,
-        look: RC.state.makeLook(this.rng),
+      const vip = size === 1 && this.s.level >= 3 && this.rng.chance(vipChance);
+      const party = {
+        id: this.nextPid++,
+        size,
+        looks: Array.from({ length: size }, () => RC.state.makeLook(this.rng)),
         vip,
         vipTitle: vip ? this.rng.pick(D.VIP_TITLES) : null,
-        x: g.door.x + 0.5,
-        y: g.door.y + 0.5,
-        dir: 0,
-        face: 0,
-        path,
-        state: 'enter',
-        t: 0,
-        seat: seat.uid,
-        dish: null,
         p: 1,
-        claimedBy: null,
-        mood: 'ok',
-        fade: 0,
-        eatTotal: 1,
+        tableUid: null,
+        dined: 0, // 實際上過菜的人數（有人用餐才需要收桌子）
       };
-      this.seatTaken.set(seat.uid, c.id);
-      this.customers.push(c);
+      this.queue.push(party);
+      this.seatQueue();
+      if (this.queue.includes(party) && this.queuePeople() > D.QUEUE_MAX_PEOPLE) {
+        this.queue = this.queue.filter((x) => x !== party);
+        this.s.stats.walkouts++;
+        this.emit('turnaway', { size });
+        return false;
+      }
+      this.changed();
       return true;
+    }
+
+    /**
+     * 最小夠坐的空桌（桌子被別組佔用就不算空）。回傳 {table, seats}。
+     * 座位本身也要沒人：搬動家具後，椅子可能改歸另一張桌子，但椅子上還坐著別組的客人。
+     */
+    findTable(size) {
+      let best = null;
+      for (const t of this.tables.values()) {
+        if (this.tableParty.has(t.uid) || this.dirty.has(t.uid)) continue;
+        const free = t.seats.filter((x) => !this.seatTaken.has(x.uid));
+        if (free.length < size) continue;
+        if (!best || free.length < best.seats.length) best = { table: t, seats: free };
+      }
+      return best;
+    }
+
+    /** 依抵達順序，讓有合適空桌的團體入座。 */
+    seatQueue() {
+      if (!this.stoves.length) return;
+      for (const party of this.queue.slice()) {
+        const found = this.findTable(party.size);
+        if (found) this.seatParty(party, found.table, found.seats);
+      }
+    }
+
+    seatParty(party, table, seats) {
+      const g = this.grid;
+      this.queue = this.queue.filter((x) => x !== party);
+      this.tableParty.set(table.uid, party.id);
+      party.tableUid = table.uid;
+      this.parties.push(party);
+      for (let i = 0; i < party.size; i++) {
+        const seat = seats[i];
+        const c = {
+          id: this.nextCid++,
+          party: party.id,
+          look: party.looks[i],
+          vip: party.vip,
+          vipTitle: party.vipTitle,
+          x: g.door.x + 0.5,
+          y: g.door.y + 0.5,
+          dir: 0,
+          face: 0,
+          path: [],
+          state: 'arrive', // 同組成員依序從門口進場
+          t: i * 0.6,
+          seat: seat.uid,
+          dish: null,
+          p: 1,
+          claimedBy: null,
+          mood: 'ok',
+          fade: 0,
+          eatTotal: 1,
+        };
+        this.seatTaken.set(seat.uid, c.id);
+        this.customers.push(c);
+      }
     }
 
     pickDish() {
@@ -277,8 +384,8 @@
       return this.rng.pick(learned);
     }
 
-    /** 客人帶著怒氣或因版面變動離開；angry 為 true 會記一次差評。 */
-    sendHome(c, angry) {
+    /** 單一客人起身離開（不處理同組與統計）。 */
+    startLeave(c, angry) {
       if (c.state === 'leave') return;
       if (c.claimedBy != null) {
         const m = this.crewById(c.claimedBy);
@@ -289,15 +396,34 @@
       c.state = 'leave';
       c.t = 0;
       c.angry = !!angry;
-      if (angry) {
-        this.s.stats.angry++;
-        this.emit('angry', { x: c.x, y: c.y });
-      }
       const g = this.grid;
       this.relocateIfBlocked(c);
       c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y);
       if (!c.path) c.path = [];
       c.dead = c.path.length === 0 && Math.floor(c.x) === g.door.x && Math.floor(c.y) === g.door.y;
+    }
+
+    /**
+     * 整組一起離開。angry=true 代表有人等太久而生氣：還沒吃完的人氣走（記一次差評），
+     * 已經吃完付過錢的人照常開心離席。
+     */
+    sendParty(partyId, angry) {
+      let at = null;
+      for (const m of this.customers) {
+        if (m.party !== partyId || m.state === 'leave') continue;
+        at = at || m;
+        this.startLeave(m, m.state === 'wait_party' ? false : angry);
+      }
+      if (angry && at) {
+        this.s.stats.angry++;
+        this.emit('angry', { x: at.x, y: at.y });
+      }
+    }
+
+    /** 同組都吃完了才一起離席。 */
+    checkPartyDone(partyId) {
+      const ms = this.customers.filter((m) => m.party === partyId && m.state !== 'leave');
+      if (ms.length && ms.every((m) => m.state === 'wait_party')) for (const m of ms) this.startLeave(m, false);
     }
 
     /** 沿路徑前進；回傳 true 表示已走完。 */
@@ -330,6 +456,20 @@
       const seat = this.seatByChair.get(c.seat);
       c.fade = Math.min(1, c.fade + dt * 3);
       switch (c.state) {
+        case 'arrive': {
+          c.fade = 0;
+          c.t -= dt;
+          if (c.t <= 0) {
+            const g = this.grid;
+            const path = seat && W.findPath(g, g.door.x, g.door.y, seat.x, seat.y);
+            if (!path) this.sendParty(c.party, false);
+            else {
+              c.path = path;
+              c.state = 'enter';
+            }
+          }
+          break;
+        }
         case 'enter':
           if (this.follow(c, CUSTOMER_SPEED, dt) && seat) {
             c.x = seat.x + 0.5;
@@ -368,7 +508,7 @@
       }
       if (c.state === 'wait_order' || c.state === 'wait_food') {
         c.mood = c.p > 0.55 ? 'happy' : c.p > 0.25 ? 'ok' : 'mad';
-        if (c.p <= 0) this.sendHome(c, true);
+        if (c.p <= 0) this.sendParty(c.party, true);
       }
     }
 
@@ -383,7 +523,6 @@
       s.stats.tips += tip;
       this.addXp(info.def.xp * mult);
       const seat = this.seatByChair.get(c.seat);
-      this.seatTaken.delete(c.seat);
       c.mood = 'happy';
       c.paid = total;
       if (seat) {
@@ -397,28 +536,77 @@
         }
       }
       this.emit('served', { vip: c.vip, tip });
-      // 離座
-      c.state = 'leave';
+      // 吃完先坐著等同伴，全組吃完才一起離席
+      c.state = 'wait_party';
       c.t = 0;
-      const g = this.grid;
-      c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y) || [];
+      this.checkPartyDone(c.party);
       this.changed();
     }
 
     /* ───────── 員工行為 ───────── */
 
+    /** 店掌櫃手上的差事：收金幣（可以插隊）。 */
+    dispatchBoss() {
+      const boss = this.crew.find((m) => m.boss);
+      if (!boss) return;
+      while (this.errands.length) {
+        const e = this.errands[0];
+        if (!this.s.drops[e.key]) {
+          this.errands.shift();
+          continue;
+        }
+        // 煮到一半或正在上菜時不打斷，免得浪費餐點
+        if (!['idle', 'to_customer', 'taking', 'wait_stove', 'to_stove', 'to_clean'].includes(boss.state)) return;
+        const r = W.nearestReachable(this.grid, Math.floor(boss.x), Math.floor(boss.y), e.access);
+        this.errands.shift();
+        if (!r) {
+          this.toast('掌櫃走不到那張桌子', 'bad');
+          continue;
+        }
+        this.abortJob(boss);
+        boss.errand = e;
+        boss.state = 'to_coin';
+        boss.path = r.path;
+        return;
+      }
+    }
+
+    /** 把待收拾的桌子分給閒置員工（含掌櫃）。 */
+    dispatchClean(idle) {
+      for (const [uid, d] of this.dirty) {
+        if (!idle.length) return;
+        if (d.claimedBy != null) continue;
+        const t = this.tables.get(uid);
+        if (!t) continue;
+        let best = null;
+        for (const m of idle) {
+          const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), t.access);
+          if (r && (!best || r.path.length < best.path.length)) best = { m, ...r };
+        }
+        if (!best) continue;
+        const m = best.m;
+        d.claimedBy = m.id;
+        m.cleanUid = uid;
+        m.state = 'to_clean';
+        m.path = best.path;
+        idle.splice(idle.indexOf(m), 1);
+      }
+    }
+
     dispatch() {
-      const waiting = this.customers.filter((c) => c.state === 'wait_order' && c.claimedBy == null);
-      if (!waiting.length) return;
-      const idle = this.crew.filter((m) => m.state === 'idle' && m.rec.energy > REST_BELOW);
+      this.dispatchBoss();
+      const idle = this.crew.filter((m) => m.state === 'idle' && !m.job && m.rec.energy > REST_BELOW);
       if (!idle.length) return;
+      // 有人在門外等位時，先收桌子讓位子盡快空出來
+      if (this.queue.length) this.dispatchClean(idle);
+      const waiting = this.customers.filter((c) => c.state === 'wait_order' && c.claimedBy == null);
       waiting.sort((a, b) => a.p - b.p);
       for (const c of waiting) {
+        if (!idle.length) break;
         const seat = this.seatByChair.get(c.seat);
         if (!seat) continue;
         let best = null;
         for (const m of idle) {
-          if (m.job) continue;
           const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), seat.access);
           if (r && (!best || r.path.length < best.path.length)) best = { m, ...r };
         }
@@ -429,8 +617,8 @@
         m.path = best.path;
         c.claimedBy = m.id;
         idle.splice(idle.indexOf(m), 1);
-        if (!idle.length) break;
       }
+      this.dispatchClean(idle);
     }
 
     claimStove(m) {
@@ -454,6 +642,7 @@
     stepStaff(m, dt) {
       const rec = m.rec;
       const spd = STAFF_SPEED * rec.speed;
+      if (rec.boss) rec.energy = 100; // 店掌櫃是玩家本人，不會累
       const c = m.job ? this.customerById(m.job.cid) : null;
       if (m.job && (!c || c.state === 'leave' || c.claimedBy !== m.id)) {
         this.abortJob(m);
@@ -477,6 +666,51 @@
           }
           break;
         }
+        case 'to_coin':
+          if (this.follow(m, spd, dt)) {
+            m.state = 'collecting';
+            m.t = 0.35;
+            m.dir = this.dirToward(m, m.errand.tx + 0.5, m.errand.ty + 0.5);
+          }
+          break;
+        case 'collecting':
+          m.t -= dt;
+          if (m.t <= 0) {
+            const e = m.errand;
+            m.errand = null;
+            if (e && this.s.drops[e.key]) this.collect(e.tx, e.ty);
+            m.state = 'idle';
+            m.idleT = 0.2;
+          }
+          break;
+        case 'to_clean': {
+          const t = this.tables.get(m.cleanUid);
+          if (!t || !this.dirty.has(m.cleanUid)) {
+            this.abortJob(m);
+            break;
+          }
+          if (this.follow(m, spd, dt)) {
+            m.state = 'cleaning';
+            m.cleanTotal = m.t = CLEAN_TIME / rec.speed;
+            m.dir = this.dirToward(m, t.seats[0].tx + 0.5, t.seats[0].ty + 0.5);
+          }
+          break;
+        }
+        case 'cleaning':
+          m.t -= dt;
+          if (!this.dirty.has(m.cleanUid)) {
+            this.abortJob(m);
+          } else if (m.t <= 0) {
+            const d = this.dirty.get(m.cleanUid);
+            this.dirty.delete(m.cleanUid);
+            m.cleanUid = null;
+            rec.energy = Math.max(0, rec.energy - 2);
+            m.state = 'idle';
+            m.idleT = 0.3;
+            this.emit('cleaned', { x: d.x + 0.5, y: d.y + 0.5 });
+            this.changed();
+          }
+          break;
         case 'rest':
           m.walking = false;
           m.path = [];
@@ -544,6 +778,8 @@
           m.t -= dt;
           if (m.t <= 0) {
             c.state = 'eat';
+            const party = this.parties.find((x) => x.id === c.party);
+            if (party) party.dined++;
             c.servedP = c.p;
             c.t = D.dishes[c.dish].eat * this.rng.range(0.85, 1.15);
             c.eatTotal = c.t;
@@ -599,12 +835,80 @@
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
         this.trySpawn();
-        this.spawnTimer = this.spawnInterval();
+        // 一組來 n 人，下一組晚 n 倍時間抵達，整體客流量不隨人數變多而暴增
+        this.spawnTimer = this.spawnInterval() * this.lastPartySize;
       }
+      this.stepQueue(dt);
       for (const c of this.customers) this.stepCustomer(c, dt);
       this.customers = this.customers.filter((c) => !c.gone);
+      // 整組都離席後才釋出桌子
+      this.parties = this.parties.filter((p) => {
+        const active = this.customers.some((c) => c.party === p.id && c.state !== 'leave');
+        if (!active && this.tableParty.get(p.tableUid) === p.id) {
+          this.tableParty.delete(p.tableUid);
+          const t = this.tables.get(p.tableUid);
+          if (p.dined > 0 && t) this.dirty.set(p.tableUid, { x: t.seats[0].tx, y: t.seats[0].ty, claimedBy: null });
+        }
+        return active;
+      });
       this.dispatch();
       for (const m of this.crew) this.stepStaff(m, dt);
+    }
+
+    /** 候位：耐心遞減、坐不下任何桌子的組別直接離開、有空桌就入座。 */
+    stepQueue(dt) {
+      if (!this.queue.length) return;
+      for (const party of this.queue.slice()) {
+        party.p -= dt / D.QUEUE_PATIENCE;
+        if (party.p <= 0 || party.size > this.maxTableCap) {
+          this.queue = this.queue.filter((x) => x !== party);
+          this.s.stats.walkouts++;
+          this.emit('walkout', { size: party.size });
+        }
+      }
+      this.seatQueue();
+    }
+
+    /* ───────── 離線收益 ───────── */
+
+    /**
+     * 離開一段時間後回來：以真實模擬快轉（最多 8 小時、效率 50%）。
+     * 離開不到 5 秒不處理；回傳報告（show=false 表示太短不必打擾玩家）。
+     */
+    catchUp(awaySeconds) {
+      const O = D.OFFLINE;
+      if (!isFinite(awaySeconds) || awaySeconds < O.minAway) return null;
+      const s = this.s;
+      const real = Math.min(awaySeconds, O.maxHours * 3600);
+      const simulated = real * O.efficiency;
+      const pile = () => Object.values(s.drops).reduce((a, b) => a + b, 0);
+      const before = { served: s.stats.served, earned: s.stats.earned, level: s.level, pile: pile(), walkouts: s.stats.walkouts, angry: s.stats.angry };
+      this.quiet = true;
+      let left = simulated;
+      while (left > 1e-6) {
+        const h = Math.min(O.step, left);
+        this.step(h);
+        left -= h;
+      }
+      this.quiet = false;
+      let reward = 0;
+      for (let lv = before.level + 1; lv <= s.level; lv++) reward += D.levelReward(lv);
+      this.changed();
+      return {
+        show: awaySeconds >= O.minReport,
+        away: awaySeconds,
+        capped: awaySeconds > O.maxHours * 3600,
+        simulated,
+        served: s.stats.served - before.served,
+        earned: s.stats.earned - before.earned,
+        pending: Math.max(0, pile() - before.pile),
+        levelFrom: before.level,
+        levelTo: s.level,
+        levelReward: reward,
+        walkouts: s.stats.walkouts - before.walkouts,
+        angry: s.stats.angry - before.angry,
+        hasRegister: this.hasRegister,
+      };
     }
 
     /* ───────── 玩家動作（回傳 {ok, msg}） ───────── */
@@ -747,7 +1051,7 @@
       const s = this.s;
       const cand = s.candidates[idx];
       if (!cand) return this.fail('找不到應徵者');
-      if (s.staff.length >= D.maxStaffForLevel(s.level)) return this.fail('員工人數已達上限，升級可增加名額');
+      if (s.staff.filter((m) => !m.boss).length >= D.maxStaffForLevel(s.level)) return this.fail('員工人數已達上限，升級可增加名額');
       const cost = RC.state.hireCost(cand, s.staff.length);
       if (s.coins < cost) return this.fail('金幣不足');
       s.coins -= cost;
@@ -768,9 +1072,9 @@
 
     fire(id) {
       const s = this.s;
-      if (s.staff.length <= 1) return this.fail('至少要留一位員工');
       const m = this.crewById(id);
       if (!m) return this.fail('找不到員工');
+      if (m.boss) return this.fail('店掌櫃就是你，不能開除');
       this.abortJob(m);
       this.crew = this.crew.filter((x) => x !== m);
       s.staff = s.staff.filter((x) => x.id !== id);
@@ -795,7 +1099,36 @@
       return this.done();
     }
 
-    /** 點擊桌上的金幣堆 */
+    renameBoss(name) {
+      name = String(name || '').trim().slice(0, 8);
+      if (!name) return this.fail('名字不能是空的');
+      const boss = this.s.staff.find((m) => m.boss);
+      if (!boss) return this.fail('找不到店掌櫃');
+      boss.name = name;
+      return this.done();
+    }
+
+    coinClaimed(key) {
+      return this.errands.some((e) => e.key === key) || this.crew.some((m) => m.errand && m.errand.key === key);
+    }
+
+    /** 玩家點了桌上的金幣：桌上的錢只有店掌櫃能收，他會走過去。 */
+    requestCollect(tx, ty) {
+      const key = tx + ',' + ty;
+      if (!this.s.drops[key]) return this.fail('沒有金幣');
+      if (this.coinClaimed(key)) return { ok: true, queued: true };
+      const access = [];
+      for (let d = 0; d < 4; d++) {
+        const nx = tx + DX[d];
+        const ny = ty + DY[d];
+        if (W.walkable(this.grid, nx, ny) && this.grid.reach[ny * this.grid.w + nx]) access.push({ x: nx, y: ny });
+      }
+      if (!access.length) return this.fail('掌櫃走不到那張桌子');
+      this.errands.push({ key, tx, ty, access });
+      return { ok: true };
+    }
+
+    /** 立刻入帳（店掌櫃走到桌邊後呼叫；測試與離線結算也用得到） */
     collect(tx, ty) {
       const key = tx + ',' + ty;
       const amt = this.s.drops[key];

@@ -15,7 +15,9 @@ const run = (g, sec, dt = 0.05) => {
 
 test('初始版面：有座位、有爐灶、門口可通行', () => {
   const g = mk();
-  assert.equal(g.seats.length, 2);
+  assert.equal(g.seats.length, 4);
+  assert.equal(g.tables.size, 2);
+  assert.equal(g.maxTableCap, 2);
   assert.equal(g.stoves.length, 1);
   assert.ok(g.grid.reach[D.DOOR_Y * g.grid.w + 0]);
 });
@@ -87,8 +89,7 @@ test('移動家具時工作會被安全中止，客人不會卡死', () => {
   run(g, 20);
   const stove = g.s.items.find((i) => i.id === 'stove_gas');
   assert.equal(g.moveItem(stove.uid, 6, 0, 0).ok, true);
-  const table = g.s.items.find((i) => i.id === 'table_wood');
-  assert.equal(g.storeItem(table.uid).ok, true); // 沒桌子 → 沒座位
+  for (const table of g.s.items.filter((i) => i.id === 'table_wood')) assert.equal(g.storeItem(table.uid).ok, true); // 沒桌子 → 沒座位
   assert.equal(g.seats.length, 0);
   run(g, 20);
   assert.equal(g.customers.length, 0, '所有客人都該離開');
@@ -101,7 +102,7 @@ test('購買/擺放/出售流程與金幣', () => {
   assert.equal(g.buyFurniture('chair_wood').ok, true);
   assert.equal(g.s.coins, 300 - 45);
   assert.equal(g.placeFromInventory('chair_wood', 3, 5, 0).ok, true);
-  assert.equal(g.seats.length, 3);
+  assert.equal(g.seats.length, 5); // (3,5) 夾在兩張桌子之間，只算一個座位
   assert.equal(g.placeFromInventory('chair_wood', 3, 5, 0).ok, false);
   assert.equal(g.buyFurniture('piano').ok, false); // 等級不夠
   const it = g.s.items.find((i) => i.x === 3 && i.y === 5);
@@ -128,7 +129,8 @@ test('學菜、雇人、擴建的限制', () => {
   g.s.level = 2;
   assert.equal(g.hire(0).ok, true);
   assert.equal(g.s.staff.length, 2);
-  assert.equal(g.hire(0).ok, false); // 2 級只有 2 個名額
+  assert.equal(g.hire(0).ok, true); // 掌櫃不佔名額：2 級可雇 2 位
+  assert.equal(g.hire(0).ok, false); // 第 3 位超過上限
   assert.equal(g.expand().ok, false); // 3 級才可擴建
   g.s.level = 3;
   assert.equal(g.expand().ok, true);
