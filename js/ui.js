@@ -12,12 +12,12 @@
   const ic = (name, scale) => `<img class="px" src="${AP.iconURL(name, scale || 2)}" width="${12 * (scale || 2)}" height="${12 * (scale || 2)}" alt="">`;
 
   const avatarCache = new Map();
-  function avatar(look, staff) {
-    const key = JSON.stringify(look) + staff;
+  function avatar(look, staff, boss) {
+    const key = JSON.stringify(look) + staff + (boss ? 'B' : '');
     let u = avatarCache.get(key);
     if (!u) {
       const c = gfx.canvas(20, 36);
-      AP.drawPerson(gfx.ctx(c), 10, 34, look, { dir: 1, staff: !!staff });
+      AP.drawPerson(gfx.ctx(c), 10, 34, look, { dir: 1, staff: !!staff, boss: !!boss });
       const big = gfx.canvas(40, 72);
       gfx.ctx(big).drawImage(c, 0, 0, 40, 72);
       u = big.toDataURL();
@@ -26,6 +26,7 @@
     return u;
   }
 
+  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_coin: '去收錢', collecting: '收款中' };
   const PANELS = {
     shop: { title: '商店', icon: 'shop' },
     inv: { title: '倉庫', icon: 'box' },
@@ -188,7 +189,7 @@
       set(this.el.navQuest, !!(q && q.done), '!');
       const learnable = D.dishList.filter((d) => !s.dishes[d.id] && s.level >= d.level && s.coins >= d.learn).length;
       set(this.el.navMenu, learnable > 0, String(learnable));
-      const hireable = s.staff.length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.hireCost(c, s.staff.length));
+      const hireable = s.staff.filter((m) => !m.boss).length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.hireCost(c, s.staff.length));
       set(this.el.navStaff, hireable, '+');
     }
 
@@ -198,6 +199,9 @@
       if (!g.stoves.length) msg = '沒有可用的爐灶！到「商店」買一座，並放在有空位站人的地方。';
       else if (!g.seats.length) msg = '沒有座位！椅子必須緊鄰桌子，客人才會入座。';
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
+      else if (g.queuePeople() >= 4) msg = `門外有 ${g.queuePeople()} 人在候位：增加桌椅（或更大的桌子）可以讓更多人入座。`;
+      else if (g.dirty.size >= 3) msg = '桌上的餐具堆積了，雇用更多員工幫忙收桌子吧。';
+      else if (Object.keys(g.s.drops).length >= 4) msg = '桌上有好幾堆金幣，點一下讓掌櫃去收（買收銀機可以自動入帳）。';
       const el = this.el.warn;
       if (msg) {
         this.setText(el, '⚠ ' + msg);
@@ -307,14 +311,14 @@
     patchStaffPanel() {
       const p = this.panel;
       if (!p || p.name !== 'staff' || !p.overlay) return;
-      const names = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中' };
       for (const m of this.game.crew) {
         const q = (k) => p.overlay.querySelector(`[data-${k}="${m.id}"]`);
+        const st = q('st');
+        if (st) this.setText(st, STATE_SHORT[m.state] || '');
         const bar = q('en');
-        if (!bar) continue;
+        if (!bar) continue; // 掌櫃沒有體力條
         bar.style.width = m.rec.energy + '%';
         this.setText(q('entx'), '體力 ' + Math.round(m.rec.energy));
-        this.setText(q('st'), names[m.state] || '');
         const feed = q('feed');
         if (feed) feed.disabled = m.rec.energy >= 95;
       }
@@ -449,18 +453,24 @@
       const g = this.game;
       const s = g.s;
       const cap = D.maxStaffForLevel(s.level);
-      const cur = s.staff
-        .map((m) => {
-          const rt = g.crewById(m.id);
-          return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
+      const hired = s.staff.filter((m) => !m.boss).length;
+      const row = (m) => {
+        if (m.boss) {
+          return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
+            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">店掌櫃・你</span> <span class="tag" data-st="${m.id}"></span></div>
+            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除</div>
+            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子。<b>桌上的金幣只有他能收</b>。</div></div>
+            <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
+        }
+        return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span> <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}</div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
-            <button class="btn small danger" data-act="fire" data-id="${m.id}" ${s.staff.length <= 1 ? 'disabled' : ''}>解雇</button></div></div>`;
-        })
-        .join('');
-      const canHire = s.staff.length < cap;
+            <button class="btn small danger" data-act="fire" data-id="${m.id}">解雇</button></div></div>`;
+      };
+      const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
+      const canHire = hired < cap;
       const cands = s.candidates
         .map((c, i) => {
           const cost = RC.state.hireCost(c, s.staff.length);
@@ -470,9 +480,9 @@
             <button class="btn primary" data-act="hire" data-idx="${i}" ${!canHire || lack ? 'disabled' : ''}>雇用 ${ic('coin', 1)}${fmt(cost)}</button></div>`;
         })
         .join('');
-      return `<div class="section-title" style="margin-top:0">目前員工 ${s.staff.length} / ${cap}${s.staff.length >= cap ? '（升級可增加名額）' : ''}</div>${cur}
+      return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="section-title">應徵者　<button class="btn small" data-act="refresh-cands">重新徵才 ${ic('coin', 1)}30</button></div>${cands}
-        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜與上菜。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>`;
+        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜與收桌子（不能收金幣）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>`;
     }
 
     htmlQuests() {
@@ -505,6 +515,7 @@
           <span>餐廳星級</span><b>${g.stars} 星</b>
           <span>服務客人</span><b>${fmt(t.served)} 位</b>
           <span>氣走的客人</span><b>${fmt(t.angry)} 位</b>
+          <span>沒等到位子離開</span><b>${fmt(t.walkouts || 0)} 組</b>
           <span>累計賺取</span><b>${fmt(t.earned)} 金幣</b>
           <span>累計小費</span><b>${fmt(t.tips)} 金幣</b>
           <span>員工人數</span><b>${s.staff.length} 位</b>
@@ -513,22 +524,25 @@
       }
       if (tab === 'data') {
         const txt = esc(RC.state.serialize(s));
-        return `<div class="sub">進度會自動存在這個瀏覽器裡。想換裝置或備份，可以複製下面的存檔文字；在另一台貼上「匯入」即可。</div>
+        return `<div class="sub">進度會自動存在這個瀏覽器裡。想換裝置或備份，可以複製下面的存檔文字（已編碼，不能手動修改）；在另一台貼上「匯入」即可。</div>
           <div class="section-title">匯出</div><textarea id="export" readonly>${txt}</textarea>
           <button class="btn small" data-act="copy-save">複製存檔</button>
           <div class="section-title">匯入</div><textarea id="import" placeholder="把存檔文字貼在這裡"></textarea>
           <button class="btn small blue" data-act="import-save">匯入並重新載入</button>
           <div class="section-title">危險區</div><button class="btn small danger" data-act="reset">重新開始（清除存檔）</button>`;
       }
+      const boss = s.staff.find((m) => m.boss);
       return `<div class="section-title" style="margin-top:0">餐廳名稱</div>
         <div style="display:flex;gap:6px;align-items:center"><input type="text" id="rn" maxlength="12" value="${esc(s.name)}"><button class="btn small primary" data-act="rename">儲存</button></div>
+        <div class="section-title">店掌櫃的名字（就是你）</div>
+        <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bn" maxlength="8" value="${esc(boss ? boss.name : '')}"><button class="btn small primary" data-act="rename-boss">儲存</button></div>
         <div class="section-title">聲音</div>
         <button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
         <button class="btn small ${A.musicOn ? 'primary' : ''}" data-act="toggle-music">音樂：${A.musicOn ? '開' : '關'}</button>
         <div class="section-title">遊戲速度</div>
         ${[1, 2, 3].map((v) => `<button class="btn small ${g.speed === v ? 'primary' : ''}" data-act="speed" data-v="${v}">×${v}</button>`).join('')}
         <div class="section-title">操作說明</div>
-        <div class="sub" style="line-height:1.7">點擊桌上的金幣收款 · 點擊員工／客人查看狀態<br>「裝潢」模式：點選家具後可旋轉、移動（也可直接拖曳）、收起、賣出<br>快捷鍵：E 裝潢　R 旋轉　Esc 取消　Delete 收起　1/2/3 速度</div>`;
+        <div class="sub" style="line-height:1.7">點擊桌上的金幣，店掌櫃會走過去收 · 點擊員工／客人查看狀態<br>「裝潢」模式：點選家具後可旋轉、移動（也可直接拖曳）、收起、賣出<br>快捷鍵：E 裝潢　R 旋轉　Esc 取消　Delete 收起　1/2/3 速度</div>`;
     }
 
     /* ───────── 彈出視窗 ───────── */
@@ -544,14 +558,50 @@
     }
 
     showWelcome() {
+      const boss = this.game.s.staff.find((m) => m.boss);
       this.modal(`<div class="welcome"><h3 style="margin:0 0 6px;font-size:20px">歡迎來到像素餐廳城！</h3>
-        <p>你的小吃店今天開張了。把它經營成傳說中的名店吧！</p>
-        <ul><li>客人會自己上門入座，員工負責點餐、煮菜、上菜</li>
-        <li>客人吃完會在桌上留下金幣，<b>點一下收進口袋</b></li>
+        <p>你的小吃店今天開張了。你就是店裡的<b>店掌櫃</b>，把它經營成傳說中的名店吧！</p>
+        <ul><li>客人有單人也有成群來，<b>不同組不併桌</b>；沒空桌就在門外候位</li>
+        <li>員工與掌櫃會點餐、煮菜、上菜，客人走後桌上會留下餐具，要收拾完才能再坐</li>
+        <li>客人吃完會在桌上留下金幣，<b>點一下，店掌櫃會走過去收</b>（只有他能收）</li>
         <li>到「商店」買桌椅、爐灶與裝飾，椅子要<b>緊鄰桌子</b></li>
-        <li>到「菜單」學新菜色，「員工」雇用更多幫手</li>
-        <li>「裝潢」可以搬動家具；進度會自動存檔</li></ul>
-        <div style="text-align:center"><button class="btn primary" data-act="welcome-ok">開始營業！</button></div></div>`);
+        <li>到「菜單」學新菜色，「員工」雇用更多幫手；進度會自動存檔，離開期間也會替你賺錢</li></ul>
+        <div class="section-title" style="margin-top:6px">幫你的店掌櫃取個名字</div>
+        <input type="text" id="bn0" maxlength="8" value="${esc(boss ? boss.name : '')}">
+        <div style="text-align:center;margin-top:6px"><button class="btn primary" data-act="welcome-ok">開始營業！</button></div></div>`);
+    }
+
+    showBossRename(reopenStaff) {
+      const boss = this.game.s.staff.find((m) => m.boss);
+      this._reopenStaff = !!reopenStaff;
+      this.modal(`<div class="section-title" style="margin-top:0">店掌櫃的名字</div>
+        <input type="text" id="bn2" maxlength="8" value="${esc(boss ? boss.name : '')}">
+        <div style="text-align:center;margin-top:8px"><button class="btn primary" data-act="boss-save">儲存</button><button class="btn" data-act="boss-cancel">取消</button></div>`);
+      setTimeout(() => {
+        const i = document.getElementById('bn2');
+        if (i) i.select();
+      }, 30);
+    }
+
+    /** 離開一段時間後回來的報告 */
+    showOffline(r) {
+      if (!r || !r.show) return;
+      const mins = Math.round(r.away / 60);
+      const dur = mins >= 60 ? `${Math.floor(mins / 60)} 小時 ${mins % 60} 分` : `${mins} 分鐘`;
+      const lines = [];
+      lines.push(`服務了 <b>${fmt(r.served)}</b> 位客人`);
+      if (r.earned > 0) lines.push(`收銀機入帳 ${ic('coin', 1)} <b>${fmt(r.earned)}</b>`);
+      if (r.pending > 0) lines.push(`桌上有 ${ic('coin', 1)} <b>${fmt(r.pending)}</b> 等你點擊，讓店掌櫃去收`);
+      if (r.levelTo > r.levelFrom) lines.push(`餐廳升到 <b>Lv.${r.levelTo}</b>，獲得升級獎勵 ${ic('coin', 1)} ${fmt(r.levelReward)}`);
+      if (r.walkouts + r.angry > 0) lines.push(`${fmt(r.walkouts + r.angry)} 組客人沒吃到就走了（桌椅或人手不足）`);
+      const note = r.capped ? '離開太久了，最多只計算 8 小時。' : '';
+      this.modal(`<div class="lvup"><h2 style="font-size:22px">歡迎回來！</h2>
+        <div>你離開了 ${dur}，店裡一直有人照看</div>
+        <div class="list">${lines.map((l) => `<div>✦ ${l}</div>`).join('')}</div>
+        <div class="sub">離線時只以 ${Math.round(D.OFFLINE.efficiency * 100)}% 的效率營業，且沒有人幫你收金幣。${note}</div>
+        <div style="margin-top:8px"><button class="btn primary" data-act="lvup-ok">收下</button></div></div>`);
+      this.panel.name = 'levelup';
+      RC.audio.sfx('quest');
     }
 
     showLevelUp() {
@@ -638,6 +688,25 @@
         }
         case 'feed': res(g.feed(+id), 'buy'); break;
         case 'claim': res(g.claimQuest(), 'quest'); break;
+        case 'rename-boss': {
+          const v = document.getElementById('bn');
+          if (v) res(g.renameBoss(v.value), 'click');
+          break;
+        }
+        case 'boss-rename': this.showBossRename(true); A.sfx('click'); break;
+        case 'boss-save': {
+          const v = document.getElementById('bn2');
+          const r = v ? res(g.renameBoss(v.value), 'buy') : { ok: false };
+          if (r.ok) {
+            this.closePanel(true);
+            if (this._reopenStaff) this.openPanel('staff');
+          }
+          break;
+        }
+        case 'boss-cancel':
+          this.closePanel(true);
+          if (this._reopenStaff) this.openPanel('staff');
+          break;
         case 'rename': {
           const v = document.getElementById('rn');
           if (v) res(g.renameRestaurant(v.value), 'click');
@@ -680,7 +749,14 @@
             location.reload();
           });
           break;
-        case 'welcome-ok': g.s.flags.welcomed = true; this.closePanel(); A.sfx('buy'); break;
+        case 'welcome-ok': {
+          const v = document.getElementById('bn0');
+          if (v && v.value.trim()) g.renameBoss(v.value);
+          g.s.flags.welcomed = true;
+          this.closePanel();
+          A.sfx('buy');
+          break;
+        }
         case 'lvup-ok':
           this.closePanel(true);
           if (this.lvQueue.length) this.showLevelUp();
@@ -855,17 +931,18 @@
         const key = 'staff' + a.id;
         if (this.actorKey !== key) {
           this.actorKey = key;
-          el.innerHTML = `<span class="x" data-act="actor-close">✕</span><h4><img class="px" src="${avatar(m.rec.look, true)}" width="20" height="36" alt=""><span>${esc(m.rec.name)}</span><span class="tag gold">Lv.${m.rec.level}</span></h4>
-            <div class="bar energy"><i data-f="en"></i></div><div class="bar-label" data-f="entx"></div>
+          el.innerHTML = `<span class="x" data-act="actor-close">✕</span><h4><img class="px" src="${avatar(m.rec.look, true, m.boss)}" width="20" height="36" alt=""><span>${esc(m.rec.name)}</span>${m.boss ? '<span class="tag gold">店掌櫃・你</span>' : `<span class="tag gold">Lv.${m.rec.level}</span>`}</h4>
+            ${m.boss ? '' : '<div class="bar energy"><i data-f="en"></i></div><div class="bar-label" data-f="entx"></div>'}
             <div class="sub" data-f="st" style="margin:4px 0"></div>
-            <div class="sub">速度 ${m.rec.speed.toFixed(2)}　技術 ${m.rec.skill.toFixed(2)}</div>
-            <button class="btn small" data-act="feed" data-id="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>`;
+            <div class="sub">速度 ${m.rec.speed.toFixed(2)}　技術 ${m.rec.skill.toFixed(2)}${m.boss ? '　不會累' : ''}</div>
+            ${m.boss ? '<button class="btn small" data-act="boss-rename">改名</button>' : `<button class="btn small" data-act="feed" data-id="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>`}`;
           el.hidden = false;
         }
-        el.querySelector('[data-f=en]').style.width = m.rec.energy + '%';
-        this.setText(el.querySelector('[data-f=entx]'), '體力 ' + Math.round(m.rec.energy));
-        const names = { idle: '待命中', rest: '正在休息', to_customer: '前往點餐', taking: '點餐中', wait_stove: '等待空爐灶', to_stove: '前往爐灶', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中' };
-        this.setText(el.querySelector('[data-f=st]'), '狀態：' + (names[m.state] || ''));
+        if (!m.boss) {
+          el.querySelector('[data-f=en]').style.width = m.rec.energy + '%';
+          this.setText(el.querySelector('[data-f=entx]'), '體力 ' + Math.round(m.rec.energy));
+        }
+        this.setText(el.querySelector('[data-f=st]'), '狀態：' + (STATE_SHORT[m.state] || ''));
       } else {
         const c = g.customerById(a.id);
         if (!c) {
@@ -881,7 +958,8 @@
             <div class="sub" data-f="st"></div><div class="bar"><i data-f="p"></i></div><div class="bar-label">耐心</div>`;
           el.hidden = false;
         }
-        const st = { enter: '走向座位', browse: '看菜單中', wait_order: '等待點餐', ordering: '正在點餐', wait_food: '等待上菜', eat: '用餐中', leave: '準備離開' }[c.state] || '';
+        const party = g.parties.find((x) => x.id === c.party);
+        const st = ({ enter: '走向座位', browse: '看菜單中', wait_order: '等待點餐', ordering: '正在點餐', wait_food: '等待上菜', eat: '用餐中', wait_party: '等同伴吃完', leave: '準備離開' }[c.state] || '') + (party && party.size > 1 ? `　同行 ${party.size} 人` : '');
         const want = c.dish ? `　想吃：${D.dishes[c.dish].name}` : '';
         this.setText(el.querySelector('[data-f=st]'), st + want);
         const p = el.querySelector('[data-f=p]');
@@ -1035,8 +1113,11 @@
       if (ptr && ptr.moved) return;
       const hit = this.view.pick(p.x, p.y);
       if (hit && hit.type === 'drop') {
-        const r = this.game.collect(hit.tx, hit.ty);
-        if (!r.ok) RC.audio.sfx('error');
+        const r = this.game.requestCollect(hit.tx, hit.ty);
+        if (!r.ok) {
+          RC.audio.sfx('error');
+          this.toast(r.msg, 'bad');
+        } else if (!r.queued) RC.audio.sfx('click');
       } else if (hit && (hit.type === 'staff' || hit.type === 'customer')) {
         RC.audio.sfx('click');
         this.showActor(hit.type, hit.id);

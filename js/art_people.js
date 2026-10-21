@@ -56,11 +56,13 @@
       add(3, -7 + dy, 2, 1, skin);
     }
     if (o.staff && !back) {
-      add(-3, -11 + dy, 6, 6, '#f6f1e6');
-      add(-3, -11 + dy, 6, 1, '#d94f43');
-      add(2, -11 + dy, 1, 6, '#d9d2c3');
+      // 店掌櫃穿深褐色圍裙配金邊；一般員工是白圍裙
+      add(-3, -11 + dy, 6, 6, o.boss ? '#6b4528' : '#f6f1e6');
+      add(-3, -11 + dy, 6, 1, o.boss ? '#e8b83a' : '#d94f43');
+      add(2, -11 + dy, 1, 6, o.boss ? '#4f321c' : '#d9d2c3');
+      if (o.boss) add(-1, -8 + dy, 2, 2, '#e8b83a');
     } else if (o.staff && back) {
-      add(-3, -9 + dy, 6, 1, '#f6f1e6');
+      add(-3, -9 + dy, 6, 1, o.boss ? '#e8b83a' : '#f6f1e6');
     }
     if (o.vip && !back) {
       add(-1, -13 + dy, 1, 5, '#e8b83a');
@@ -94,9 +96,11 @@
     }
     if (look.hairStyle === 2) add(-2, -26 + dy, 4, 3, hair);
     if (o.staff) {
-      add(-5, -25 + dy, 10, 3, '#f6f1e6');
-      add(-4, -29 + dy, 8, 4, '#fffaf0');
-      add(-4, -25 + dy, 8, 1, '#d9d2c3');
+      // 店掌櫃戴紅色廚師帽、金色帽帶
+      add(-5, -25 + dy, 10, 3, o.boss ? '#d94f43' : '#f6f1e6');
+      add(-4, -29 + dy, 8, 4, o.boss ? '#e85d50' : '#fffaf0');
+      add(-4, -25 + dy, 8, 1, o.boss ? '#e8b83a' : '#d9d2c3');
+      if (o.boss) add(-1, -28 + dy, 2, 2, '#e8b83a');
     }
     if (o.vip) {
       add(-4, -26 + dy, 8, 2, '#e8b83a');
@@ -258,6 +262,7 @@
     zzz: ['kkkk....', '..kb....', '.kb.kkk.', 'kkkk..kb', '....kb..', '...kkkk.'],
     exclaim: ['.kk.', 'krrk', 'krrk', 'krrk', '.kk.', 'krrk', '.kk.'],
     dots: ['........', '.k.k.k..', 'kbkbkbk.', '.k.k.k..'],
+    plates: ['.kkkkk..', 'kwwwwwk.', 'kWWWWWkk', '.kkkkkWk', '.kwwwwwk', '.kWWWWWk', '..kkkkk.'],
   };
   const fxCache = new Map();
   function fx(name) {
@@ -267,6 +272,25 @@
       fxCache.set(name, c);
     }
     return c;
+  }
+
+  /** 7×7 的小頭像（候位標示用） */
+  function drawHead(g, x, y, look) {
+    x = Math.round(x);
+    y = Math.round(y);
+    g.fillStyle = OUTLINE;
+    g.fillRect(x, y, 7, 7);
+    g.fillStyle = P.skin[look.skin];
+    g.fillRect(x + 1, y + 2, 5, 4);
+    g.fillStyle = P.hair[look.hair];
+    g.fillRect(x + 1, y + 1, 5, 2);
+    if (look.hairStyle === 1) {
+      g.fillRect(x + 1, y + 3, 1, 3);
+      g.fillRect(x + 5, y + 3, 1, 3);
+    }
+    g.fillStyle = OUTLINE;
+    g.fillRect(x + 2, y + 4, 1, 1);
+    g.fillRect(x + 4, y + 4, 1, 1);
   }
 
   /** 對話泡泡：白底圓角 + 尾巴；內容由呼叫者畫在 (x+2,y+2) 起的內框。回傳內框尺寸。 */
@@ -285,5 +309,5 @@
     return { x: x + 1, y: y + 1, w: w - 2, h: h - 2 };
   }
 
-  RC.artPeople = { drawPerson, dish, icon, iconURL, furnThumb, fx, bubble, ICONS_LIST: Object.keys(ICONS), DISH_IDS: Object.keys(DISH) };
+  RC.artPeople = { drawPerson, drawHead, dish, icon, iconURL, furnThumb, fx, bubble, ICONS_LIST: Object.keys(ICONS), DISH_IDS: Object.keys(DISH) };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

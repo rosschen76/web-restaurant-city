@@ -31,6 +31,25 @@ function invariants(g, label) {
     }
   }
   assert.ok(g.customers.length <= Math.max(g.seats.length, 0) + g.customers.filter((c) => c.state === 'leave').length, `${label}: 客人數超過座位`);
+  // 一張椅子只坐一個人；同組要嘛都在離開、要嘛都沒有
+  const seated = g.customers.filter((c) => c.state !== 'leave').map((c) => c.seat);
+  assert.equal(new Set(seated).size, seated.length, `${label}: 兩位客人坐同一張椅子`);
+  const byParty = new Map();
+  for (const c of g.customers) (byParty.get(c.party) || byParty.set(c.party, []).get(c.party)).push(c.state);
+  for (const st of byParty.values()) if (st.includes('leave')) assert.ok(st.every((x) => x === 'leave'), `${label}: 同組有人離開、有人還在 ${st}`);
+  assert.ok(g.queuePeople() <= RC.data.QUEUE_MAX_PEOPLE, `${label}: 候位超過上限`);
+  // 桌子占用記錄必須指向還在場的團體
+  const pids = new Set(g.parties.map((p) => p.id));
+  for (const [, pid] of g.tableParty) assert.ok(pids.has(pid), `${label}: tableParty 指向不存在的團體`);
+  // 收桌子 / 收錢的認領關係一致
+  for (const [uid, d] of g.dirty) {
+    assert.ok(g.tables.has(uid), `${label}: 髒桌子已不存在`);
+    if (d.claimedBy != null) assert.equal(g.crewById(d.claimedBy) && g.crewById(d.claimedBy).cleanUid, uid, `${label}: 收桌認領不一致`);
+  }
+  for (const m of g.crew) {
+    if (m.cleanUid != null) assert.equal(g.dirty.get(m.cleanUid) && g.dirty.get(m.cleanUid).claimedBy, m.id, `${label}: 員工收桌對象不一致`);
+    if (m.errand) assert.ok(m.boss, `${label}: 只有掌櫃能收錢`);
+  }
   assert.ok(Number.isFinite(g.s.coins) && g.s.coins >= 0);
 }
 
@@ -65,6 +84,7 @@ for (const seed of [1, 2, 3, 4, 5]) {
     const g = new RC.Game(s, { seed });
     g.hire(0);
     g.hire(1);
+    g.requestCollect(3, 4);
     g.s.room.stage = 2;
     g.rebuild();
     const catalog = D.furnitureList;
@@ -94,7 +114,7 @@ for (const seed of [1, 2, 3, 4, 5]) {
         } else if (roll < 0.9 && items.length) {
           g.rotateItem(rng.pick(items).uid);
         } else {
-          for (const k of Object.keys(g.s.drops)) g.collect(...k.split(',').map(Number));
+          for (const k of Object.keys(g.s.drops)) g.requestCollect(...k.split(',').map(Number));
           ensureSeats(g, 3);
           // 保底：確保有桌椅爐灶，避免整場都在空轉
           if (!g.stoves.length) { g.buyFurniture('stove_gas'); for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) if (g.placeFromInventory('stove_gas', x, y, 0).ok) { y = 99; break; } }

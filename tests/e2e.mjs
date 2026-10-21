@@ -53,6 +53,11 @@ async function scenario(name, fn, opts = {}) {
     assert.deepEqual(requests404, [], '不應有 404 資源');
     console.log('ok   -', name);
   } catch (e) {
+    if (e.done) {
+      console.log('ok   -', name);
+      await ctx.close();
+      return;
+    }
     failed++;
     console.log('FAIL -', name, '\n      ', e.message.split('\n')[0]);
   }
@@ -67,14 +72,57 @@ await scenario('子路徑載入、歡迎視窗、開始營業', async (page) => 
   assert.ok((await page.title()).includes('像素餐廳城'));
 });
 
+await scenario('歡迎視窗可為店掌櫃命名；掌櫃不能被開除', async (page) => {
+  await page.fill('#bn0', '王老闆');
+  await page.click('[data-act=welcome-ok]');
+  assert.equal(await G(page, () => window.__game.game.s.staff[0].name), '王老闆');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 9999; g.s.level = 3; });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  assert.ok(await page.locator('.win').innerText().then((t) => t.includes('店掌櫃')));
+  assert.ok(await page.locator('.win').innerText().then((t) => t.includes('王老闆')));
+  assert.equal(await page.locator('[data-act=fire]').count(), 0, '掌櫃沒有解雇按鈕');
+  await page.click('[data-act=boss-rename]');
+  await page.fill('#bn2', '小當家');
+  await page.click('[data-act=boss-save]');
+  assert.equal(await G(page, () => window.__game.game.s.staff[0].name), '小當家');
+  assert.ok(await page.locator('.win').innerText().then((t) => t.includes('小當家')), '改名後回到員工面板');
+});
+
+await scenario('離線收益：離開 2 小時後重新開啟會看到歡迎回來報告', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  // 存一份「2 小時前」的存檔，並停止頁面自己的存檔，免得關閉時被蓋掉
+  await G(page, () => {
+    window.__game.ui._skipSave = true;
+    localStorage.setItem(window.RC.state.SAVE_KEY, window.RC.state.serialize(window.__game.game.s, Date.now() - 2 * 3600 * 1000));
+  });
+  const ctx = page.context();
+  await page.close();
+  const p2 = await ctx.newPage();
+  const errs = [];
+  p2.on('pageerror', (e) => errs.push(e.message));
+  await p2.goto(url);
+  await p2.waitForSelector('#game');
+  const txt = await p2.locator('.win').innerText();
+  assert.ok(txt.includes('歡迎回來') && txt.includes('2 小時'), txt);
+  assert.ok((await p2.evaluate(() => window.__game.game.s.stats.served)) > 10);
+  await p2.click('[data-act=lvup-ok]');
+  assert.equal(await p2.locator('.win').count(), 0);
+  assert.deepEqual(errs, []);
+  // scenario() 會對原 page 做檢查，所以把結果頁換成 p2
+  await p2.close();
+  throw Object.assign(new Error('__done__'), { done: true });
+});
+
 await scenario('客人上門並留下金幣，點擊收款入帳、任務推進', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => { const g = window.__game.game; for (let i = 0; i < 700 && !Object.keys(g.s.drops).length; i++) g.update(0.1); });
   const before = await G(page, () => window.__game.game.s.coins);
   const pos = await G(page, () => { const { game, view } = window.__game; const [k] = Object.keys(game.s.drops); const [x, y] = k.split(',').map(Number); return view.tileToCss(x + 0.5, y + 0.5, 20); });
   await page.mouse.click(pos.x, pos.y);
-  const after = await G(page, () => window.__game.game.s.coins);
-  assert.ok(after > before, '點擊金幣後金幣應增加');
+  assert.equal(await G(page, () => window.__game.game.s.coins), before, '點下去不會立刻入帳，要等掌櫃走過去');
+  assert.equal(await G(page, () => window.__game.game.errands.length + window.__game.game.crew.filter((m) => m.errand).length), 1, '掌櫃接下收款差事');
+  await G(page, () => { const g = window.__game.game; for (let i = 0; i < 300 && g.s.stats.collects < 1; i++) g.update(0.1); });
+  assert.ok((await G(page, () => window.__game.game.s.coins)) > before, '掌櫃收完後金幣增加');
   assert.equal(await G(page, () => window.__game.game.s.stats.collects), 1);
 });
 
@@ -96,14 +144,15 @@ await scenario('商店購買 → 放置預覽 → 點擊擺放', async (page) =>
 
 await scenario('員工面板在模擬進行中連點「餵食」不會丟失點擊', async (page) => {
   await page.click('[data-act=welcome-ok]');
-  await G(page, () => { const { game } = window.__game; game.s.coins = 9999; game.setSpeed && 0; game.speed = 3; game.crew[0].rec.energy = 5; });
+  await G(page, () => { const { game } = window.__game; game.s.coins = 9999; game.s.level = 3; game.hire(0); game.speed = 3; });
+  const hiredId = await G(page, () => window.__game.game.s.staff.find((m) => !m.boss).id);
   await page.click('.bottom-bar [data-act=open-staff]');
   let fed = 0;
   for (let i = 0; i < 6; i++) {
-    await G(page, () => { window.__game.game.crew[0].rec.energy = 5; });
+    await G(page, (id) => { window.__game.game.crewById(id).rec.energy = 5; }, hiredId);
     await page.waitForTimeout(120 + i * 70); // 讓面板定時更新在不同時間點發生
     const c0 = await G(page, () => window.__game.game.s.coins);
-    await page.click('[data-act=feed]');
+    await page.click(`[data-act=feed][data-id="${hiredId}"]`);
     const c1 = await G(page, () => window.__game.game.s.coins);
     if (c1 < c0) fed++;
   }

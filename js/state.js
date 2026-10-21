@@ -43,16 +43,18 @@
       level: 1,
       xp: 0,
       energy: 100,
+      boss: !!cand.boss,
     };
   }
 
   function newGame(rng) {
     rng = rng || RC.util.makeRng(Date.now());
     const first = {
-      name: '阿福',
+      name: '阿福', // 店掌櫃：玩家本人，可在遊戲中改名
       look: { skin: 1, hair: 0, hairStyle: 0, top: 7, pants: 0 },
-      speed: 1,
-      skill: 1,
+      speed: 1.15,
+      skill: 1.1,
+      boss: true,
     };
     const s = {
       v: SAVE_VERSION,
@@ -71,17 +73,20 @@
       candidates: [],
       drops: {},
       quest: { i: 0 },
-      stats: { served: 0, angry: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
+      stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       settings: { sound: true, music: true, speed: 1 },
       flags: { welcomed: false },
       savedAt: 0,
     };
     const add = (id, x, y, rot) => s.items.push({ uid: s.nextUid++, id, x, y, rot: rot || 0 });
-    // 起始擺設：一張桌、兩張椅、一座爐灶、一盆小植物
+    // 起始擺設：兩張桌各兩張椅（不併桌，所以至少要兩桌）、一座爐灶、一盆小植物
     add('stove_gas', 5, 0, 0);
     add('table_wood', 3, 4, 0);
     add('chair_stool', 2, 4, 0);
     add('chair_stool', 4, 4, 2);
+    add('table_wood', 3, 6, 0);
+    add('chair_stool', 2, 6, 0);
+    add('chair_stool', 4, 6, 2);
     add('plant_pot', 7, 0, 0);
     for (let i = 0; i < 3; i++) s.candidates.push(makeCandidate(rng, s.staff.map((m) => m.name)));
     return s;
@@ -160,10 +165,14 @@
         level: Math.floor(num(m.level, 1, 1, D.STAFF_XP_STEPS.length)),
         xp: Math.floor(num(m.xp, 0, 0, 1e9)),
         energy: num(m.energy, 100, 0, 100),
+        boss: !!m.boss,
       });
       maxId = Math.max(maxId, id);
     }
     if (staff.length) {
+      // 一定要有且只有一位店掌櫃（舊存檔沒有這個欄位：第一位員工就是掌櫃）
+      const first = staff.findIndex((m) => m.boss);
+      staff.forEach((m, i) => (m.boss = i === (first < 0 ? 0 : first)));
       s.staff = staff;
       s.nextStaffId = maxId + 1;
     }
@@ -181,6 +190,7 @@
     s.stats = {
       served: Math.floor(num(rs.served, 0, 0, 1e9)),
       angry: Math.floor(num(rs.angry, 0, 0, 1e9)),
+      walkouts: Math.floor(num(rs.walkouts, 0, 0, 1e9)),
       earned: Math.floor(num(rs.earned, 0, 0, 1e13)),
       collects: Math.floor(num(rs.collects, 0, 0, 1e9)),
       tips: Math.floor(num(rs.tips, 0, 0, 1e13)),
@@ -193,12 +203,16 @@
     return s;
   }
 
-  function serialize(state) {
-    return JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: Date.now() });
+  /** 存檔字串（已編碼，見 codec.js）。savedAt 可指定，預設為現在。 */
+  function serialize(state, savedAt) {
+    return RC.codec.encode(JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }));
   }
 
+  /** 解析存檔字串；格式不對或被改過會丟出錯誤。匯入玩家貼上的文字時只接受編碼過的格式。 */
   function parse(text, rng) {
-    return normalize(JSON.parse(text), rng);
+    const plain = RC.codec.decode(text);
+    if (plain === null) throw new Error('存檔格式不正確或已被修改');
+    return normalize(JSON.parse(plain), rng);
   }
 
   function getStorage() {
@@ -220,14 +234,29 @@
     }
   }
 
-  /** 讀檔；沒有存檔或壞檔時回傳 null。 */
+  /**
+   * 讀檔；沒有存檔或壞檔時回傳 null。loadStatus 為 'none' | 'ok' | 'corrupt'。
+   * 讀不出來的存檔（損毀或被改過）會備份到另一個鍵再重新開始，不會直接消失。
+   * 相容舊版（編碼機制上線前）的明文 JSON 存檔：讀取後下次存檔就會變成編碼格式。
+   */
   function load(storage, rng) {
+    state.loadStatus = 'none';
     storage = storage || getStorage();
     if (!storage) return null;
+    let text = null;
     try {
-      const text = storage.getItem(SAVE_KEY);
-      return text ? parse(text, rng) : null;
+      text = storage.getItem(SAVE_KEY);
+      if (!text) return null;
+      const st = text.trim().startsWith('{') ? normalize(JSON.parse(text), rng) : parse(text, rng);
+      state.loadStatus = 'ok';
+      return st;
     } catch (e) {
+      state.loadStatus = 'corrupt';
+      try {
+        if (text) storage.setItem(SAVE_KEY + '/corrupt-backup', text);
+      } catch (e2) {
+        /* 備份失敗就算了 */
+      }
       return null;
     }
   }
@@ -241,5 +270,5 @@
     }
   }
 
-  RC.state = { SAVE_KEY, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost };
+  const state = (RC.state = { loadStatus: 'none', SAVE_KEY, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

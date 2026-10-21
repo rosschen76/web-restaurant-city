@@ -139,10 +139,10 @@
   // type 對應 sim.questProgress；n 為目標值
   const quests = [
     { id: 'q1', type: 'collect', n: 3, text: '點擊餐桌上的金幣收款', reward: 30 },
-    { id: 'q2', type: 'chair', n: 3, text: '擁有 3 張椅子（商店購買後放進餐廳）', reward: 40 },
+    { id: 'q2', type: 'chair', n: 6, text: '擁有 6 張椅子（商店購買後放進餐廳）', reward: 40 },
     { id: 'q3', type: 'serve', n: 8, text: '服務 8 位客人', reward: 60 },
     { id: 'q4', type: 'learn', n: 2, text: '學會 2 道菜（到「菜單」學習豆漿）', reward: 80 },
-    { id: 'q5', type: 'table', n: 2, text: '擁有 2 張桌子', reward: 100 },
+    { id: 'q5', type: 'table', n: 3, text: '擁有 3 張桌子', reward: 100 },
     { id: 'q6', type: 'staff', n: 2, text: '雇用第 2 位員工', reward: 120 },
     { id: 'q7', type: 'level', n: 3, text: '達到 3 級', reward: 150 },
     { id: 'q8', type: 'decor', n: 2, text: '放置 2 件裝飾或地毯', reward: 150 },
@@ -164,6 +164,13 @@
     { id: 'q24', type: 'level', n: 15, text: '達到 15 級', reward: 15000 },
     { id: 'q25', type: 'stars', n: 10, text: '成為傳說中的 10 星餐廳', reward: 50000 },
   ];
+
+  /* ───────── 群體客人 / 候位 / 離線收益 ───────── */
+  const PARTY_MAX = 4; // 每組人數上限
+  const PARTY_WEIGHTS = [40, 30, 18, 12]; // 1~4 人的出現權重
+  const QUEUE_MAX_PEOPLE = 6; // 門外候位人數上限（約一組 4 人 + 一組 2 人）
+  const QUEUE_PATIENCE = 60; // 候位耐心（秒）
+  const OFFLINE = { maxHours: 8, efficiency: 0.3, minAway: 5, minReport: 60, step: 0.5 };
 
   /** 某等級新解鎖的內容（升級視窗用） */
   function unlocksAt(level) {
@@ -188,5 +195,6 @@
     maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

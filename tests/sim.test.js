@@ -15,7 +15,9 @@ const run = (g, sec, dt = 0.05) => {
 
 test('初始版面：有座位、有爐灶、門口可通行', () => {
   const g = mk();
-  assert.equal(g.seats.length, 2);
+  assert.equal(g.seats.length, 4);
+  assert.equal(g.tables.size, 2);
+  assert.equal(g.maxTableCap, 2);
   assert.equal(g.stoves.length, 1);
   assert.ok(g.grid.reach[D.DOOR_Y * g.grid.w + 0]);
 });
@@ -87,8 +89,7 @@ test('移動家具時工作會被安全中止，客人不會卡死', () => {
   run(g, 20);
   const stove = g.s.items.find((i) => i.id === 'stove_gas');
   assert.equal(g.moveItem(stove.uid, 6, 0, 0).ok, true);
-  const table = g.s.items.find((i) => i.id === 'table_wood');
-  assert.equal(g.storeItem(table.uid).ok, true); // 沒桌子 → 沒座位
+  for (const table of g.s.items.filter((i) => i.id === 'table_wood')) assert.equal(g.storeItem(table.uid).ok, true); // 沒桌子 → 沒座位
   assert.equal(g.seats.length, 0);
   run(g, 20);
   assert.equal(g.customers.length, 0, '所有客人都該離開');
@@ -101,7 +102,7 @@ test('購買/擺放/出售流程與金幣', () => {
   assert.equal(g.buyFurniture('chair_wood').ok, true);
   assert.equal(g.s.coins, 300 - 45);
   assert.equal(g.placeFromInventory('chair_wood', 3, 5, 0).ok, true);
-  assert.equal(g.seats.length, 3);
+  assert.equal(g.seats.length, 5); // (3,5) 夾在兩張桌子之間，只算一個座位
   assert.equal(g.placeFromInventory('chair_wood', 3, 5, 0).ok, false);
   assert.equal(g.buyFurniture('piano').ok, false); // 等級不夠
   const it = g.s.items.find((i) => i.x === 3 && i.y === 5);
@@ -128,7 +129,8 @@ test('學菜、雇人、擴建的限制', () => {
   g.s.level = 2;
   assert.equal(g.hire(0).ok, true);
   assert.equal(g.s.staff.length, 2);
-  assert.equal(g.hire(0).ok, false); // 2 級只有 2 個名額
+  assert.equal(g.hire(0).ok, true); // 掌櫃不佔名額：2 級可雇 2 位
+  assert.equal(g.hire(0).ok, false); // 第 3 位超過上限
   assert.equal(g.expand().ok, false); // 3 級才可擴建
   g.s.level = 3;
   assert.equal(g.expand().ok, true);
@@ -200,4 +202,80 @@ test('經濟平衡：自動玩 20 分鐘（有收款、會買東西）能順利�
   console.log('  [t, lv, coins, served, staff, seats, stoves, angry, cust]', JSON.stringify(log));
   assert.ok(g.s.stats.served >= 100, '20 分鐘至少服務 100 位，實際 ' + g.s.stats.served);
   assert.ok(g.s.level >= 4, '20 分鐘應至少 4 級，實際 ' + g.s.level);
+});
+
+test('存檔編碼：來回一致、每次輸出不同、看不到明文', () => {
+  const g = mk(7);
+  run(g, 20);
+  const a = RC.state.serialize(g.s);
+  const b = RC.state.serialize(g.s);
+  assert.ok(a.startsWith(RC.codec.PREFIX));
+  assert.notEqual(a, b, '同一份存檔每次編碼都不同');
+  for (const word of ['coins', 'level', 'items', '阿福', 'table_wood']) assert.ok(!a.includes(word), '不應出現明文 ' + word);
+  const back = RC.state.parse(a);
+  assert.equal(back.coins, g.s.coins);
+  assert.deepEqual(back.items, g.s.items);
+  assert.equal(back.staff[0].name, g.s.staff[0].name);
+  assert.equal(RC.state.parse(b).coins, g.s.coins);
+});
+
+test('存檔編碼：中文、特殊字元與大檔案都能來回', () => {
+  const g = mk(1);
+  g.s.name = '我的店😀';
+  g.s.coins = 123456789;
+  g.s.staff[0].name = '王老闆';
+  const back = RC.state.parse(RC.state.serialize(g.s));
+  assert.equal(back.name, '我的店😀'.slice(0, 12));
+  assert.equal(back.staff[0].name, '王老闆');
+  const text = 'x'.repeat(200000) + '中文';
+  assert.equal(RC.codec.decode(RC.codec.encode(text)), text);
+  assert.equal(RC.codec.decode(RC.codec.encode('')), '');
+});
+
+test('存檔編碼：被改動、截斷、換行貼上與明文 JSON 的處理', () => {
+  const g = mk(2);
+  const enc = RC.state.serialize(g.s);
+  // 任何一個字元被改掉都解不開（抽樣多個位置，每個位置換成另一個合法 base64 字元）
+  const body = enc.slice(RC.codec.PREFIX.length);
+  let rejected = 0;
+  for (let i = 0; i < body.length; i += Math.max(1, Math.floor(body.length / 60))) {
+    const c = body[i] === 'A' ? 'B' : 'A';
+    const bad = RC.codec.PREFIX + body.slice(0, i) + c + body.slice(i + 1);
+    assert.throws(() => RC.state.parse(bad), undefined, '位置 ' + i + ' 被改動應該被拒絕');
+    rejected++;
+  }
+  assert.ok(rejected >= 50);
+  assert.throws(() => RC.state.parse(enc.slice(0, enc.length - 8)), '截斷');
+  assert.throws(() => RC.state.parse(''), '空字串');
+  assert.throws(() => RC.state.parse(JSON.stringify(g.s)), '匯入明文 JSON 不被接受');
+  assert.throws(() => RC.state.parse('PRC1:!!!!'), '亂碼');
+  // 貼上時自動換行/空白不影響
+  const wrapped = enc.replace(/(.{40})/g, '$1\n  ');
+  assert.equal(RC.state.parse(wrapped).coins, g.s.coins);
+});
+
+test('讀檔：舊版明文存檔相容；被改過的存檔備份後重新開始', () => {
+  const store = {};
+  const storage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => (store[k] = v), removeItem: (k) => delete store[k] };
+  const g = mk(3);
+  g.s.coins = 777;
+  // 新格式
+  assert.equal(RC.state.save(g.s, storage), true);
+  assert.ok(store[RC.state.SAVE_KEY].startsWith(RC.codec.PREFIX));
+  assert.equal(RC.state.load(storage).coins, 777);
+  assert.equal(RC.state.loadStatus, 'ok');
+  // 舊版明文
+  store[RC.state.SAVE_KEY] = JSON.stringify(g.s);
+  assert.equal(RC.state.load(storage).coins, 777);
+  // 玩家改了存檔內容
+  const good = RC.state.serialize(g.s);
+  const tampered = good.slice(0, 20) + (good[20] === 'A' ? 'B' : 'A') + good.slice(21);
+  store[RC.state.SAVE_KEY] = tampered;
+  assert.equal(RC.state.load(storage), null);
+  assert.equal(RC.state.loadStatus, 'corrupt');
+  assert.equal(store[RC.state.SAVE_KEY + '/corrupt-backup'], tampered, '壞存檔要備份');
+  // 沒有存檔
+  delete store[RC.state.SAVE_KEY];
+  assert.equal(RC.state.load(storage), null);
+  assert.equal(RC.state.loadStatus, 'none');
 });

@@ -8,7 +8,7 @@
   const AP = RC.artPeople;
   const { canvas, ctx } = gfx;
 
-  const SEATED = ['browse', 'wait_order', 'ordering', 'wait_food', 'eat'];
+  const SEATED = ['browse', 'wait_order', 'ordering', 'wait_food', 'eat', 'wait_party'];
   const TOP_UI = 64; // css px，HUD 保留空間
   const BOTTOM_UI = 92;
 
@@ -268,7 +268,7 @@
           list.push({ k: key, f: () => this.drawItemSprite(g, it) });
         }
       }
-      for (const c of game.customers) if (!SEATED.includes(c.state)) list.push({ k: c.x + c.y, f: () => this.drawCustomer(g, c) });
+      for (const c of game.customers) if (!SEATED.includes(c.state) && c.state !== 'arrive') list.push({ k: c.x + c.y, f: () => this.drawCustomer(g, c) });
       for (const m of game.crew) list.push({ k: m.x + m.y + 0.02, f: () => this.drawStaff(g, m) });
 
       // 桌上的餐點與金幣
@@ -278,6 +278,7 @@
         if (!seat) continue;
         list.push({ k: seat.tx + seat.ty + 1.1, f: () => this.drawPlate(g, seat, c) });
       }
+      for (const d of game.dirty.values()) list.push({ k: d.x + d.y + 1.15, f: () => this.drawPlates(g, d) });
       for (const [key, amt] of Object.entries(s.drops)) {
         const [tx, ty] = key.split(',').map(Number);
         list.push({ k: tx + ty + 1.2, f: () => this.drawDrop(g, tx, ty, amt) });
@@ -287,6 +288,7 @@
       for (const r of list) r.f();
 
       this.drawOverlays(g);
+      this.drawQueue(g);
     }
 
     tableTopY(tx, ty) {
@@ -307,14 +309,23 @@
       g.globalAlpha = 1;
     }
 
+    drawPlates(g, d) {
+      const p = this.proj(d.x + 0.5, d.y + 0.5);
+      const z = this.tableTopY(d.x, d.y);
+      g.drawImage(AP.fx('plates'), Math.round(p[0] - 4), Math.round(p[1] - z - 7));
+    }
+
     drawDrop(g, tx, ty, amt) {
       const p = this.proj(tx + 0.5, ty + 0.5);
       const z = this.tableTopY(tx, ty);
       const bob = Math.round(Math.sin(this.time * 5 + tx * 3 + ty) * 1.5);
       const n = amt < 40 ? 1 : amt < 150 ? 2 : 3;
       const spr = AP.fx('coin');
+      const claimed = this.game.coinClaimed(tx + ',' + ty);
+      if (claimed) g.globalAlpha = 0.55; // 掌櫃已經在路上了
       for (let i = 0; i < n; i++) g.drawImage(spr, Math.round(p[0] - 4 + (i - (n - 1) / 2) * 5), Math.round(p[1] - z - 9 - i * 2 + (i === n - 1 ? bob : 0)));
-      if (((this.time * 3) | 0) % 3 === 0) g.drawImage(AP.fx('spark'), Math.round(p[0] + 3), Math.round(p[1] - z - 16 + bob));
+      g.globalAlpha = 1;
+      if (!claimed && ((this.time * 3) | 0) % 3 === 0) g.drawImage(AP.fx('spark'), Math.round(p[0] + 3), Math.round(p[1] - z - 16 + bob));
     }
 
     drawCustomer(g, c) {
@@ -337,9 +348,9 @@
 
     drawStaff(g, m) {
       const p = this.proj(m.x, m.y);
-      const o = { dir: m.dir, staff: true, moving: m.walking && m.state !== 'rest', walk: ((this.time * 8 + m.id) | 0) & 1 };
+      const o = { dir: m.dir, staff: true, boss: m.boss, moving: m.walking && m.state !== 'rest', walk: ((this.time * 8 + m.id) | 0) & 1 };
       if (this.selectedActor && this.selectedActor.kind === 'staff' && this.selectedActor.id === m.id) this.ring(g, p[0], p[1] + 4);
-      const jig = m.state === 'cooking' ? ((this.time * 6) | 0) & 1 : 0;
+      const jig = m.state === 'cooking' || m.state === 'cleaning' || m.state === 'collecting' ? ((this.time * 6) | 0) & 1 : 0;
       AP.drawPerson(g, p[0], p[1] + 3 - jig, m.rec.look, o);
       m._sx = p[0];
       m._sy = p[1] + 3;
@@ -370,6 +381,9 @@
           const b = AP.bubble(g, c._sx, top + bob, 18, 18, c.p < 0.3 ? '#ffd0c8' : '#fffaf0');
           g.drawImage(AP.dish(c.dish), b.x + 2, b.y + 2);
           this.patience(g, c, top + bob + 2);
+        } else if (c.state === 'wait_party') {
+          const b = AP.bubble(g, c._sx, top + bob, 13, 12, '#fffaf0');
+          g.drawImage(AP.fx('heart'), b.x + 2, b.y + 2);
         } else if (c.state === 'leave' && c.t < 1.6) {
           if (c.angry) {
             const b = AP.bubble(g, c._sx, top + bob, 13, 12, '#ffd0c8');
@@ -385,6 +399,7 @@
         if (m._sx == null) continue;
         const top = m._sy - 33;
         if (m.state === 'cooking') this.bar(g, m._sx, top, m.cookTotal ? 1 - m.t / m.cookTotal : 0, '#ff9a3a');
+        else if (m.state === 'cleaning') this.bar(g, m._sx, top, m.cleanTotal ? 1 - m.t / m.cleanTotal : 0, '#6fc3e0');
         else if (m.state === 'rest') {
           const b = AP.bubble(g, m._sx, top, 15, 12, '#fffaf0');
           g.drawImage(AP.fx('zzz'), b.x + 2, b.y + 2 + (((t * 2) | 0) & 1));
@@ -394,8 +409,43 @@
         } else if (m.carry) {
           g.drawImage(AP.dish(m.carry), Math.round(m._sx - 6), Math.round(top - 8 + Math.sin(t * 8)));
         }
-        if (m.rec.energy < 30 && m.state !== 'rest') g.drawImage(AP.icon('bolt'), Math.round(m._sx + 5), Math.round(top + 6));
+        if (!m.boss && m.rec.energy < 30 && m.state !== 'rest') g.drawImage(AP.icon('bolt'), Math.round(m._sx + 5), Math.round(top + 6));
       }
+    }
+
+    /** 門外候位：每組一個小標籤，顯示人數（小頭像）與剩餘耐心；每排 3 組，往門的左側排開。 */
+    drawQueue(g) {
+      const q = this.game.queue;
+      if (!q.length) return;
+      const base = this.proj(0, D.DOOR_Y + 0.5);
+      const h = 14;
+      const right = Math.round(base[0] + 6);
+      const y0 = Math.round(base[1] - A.WALL_H - 12);
+      let x = right;
+      q.slice(0, 6).forEach((party, i) => {
+        if (i % 3 === 0) x = right;
+        const row = Math.floor(i / 3);
+        const w = 6 + party.size * 8;
+        const yy = y0 - row * (h + 2);
+        const xx = x - w;
+        g.fillStyle = gfx.OUTLINE;
+        g.fillRect(xx, yy, w, h);
+        g.fillStyle = party.p < 0.3 ? '#ffd0c8' : '#fffaf0';
+        g.fillRect(xx + 1, yy + 1, w - 2, h - 2);
+        for (let k = 0; k < party.size; k++) AP.drawHead(g, xx + 3 + k * 8, yy + 2, party.looks[k]);
+        const col = party.p > 0.55 ? '#5fd35f' : party.p > 0.25 ? '#f2c94c' : '#e8493a';
+        g.fillStyle = '#5a4a40';
+        g.fillRect(xx + 2, yy + h - 4, w - 4, 2);
+        g.fillStyle = col;
+        g.fillRect(xx + 2, yy + h - 4, Math.max(0, Math.round((w - 4) * party.p)), 2);
+        x = xx - 2;
+      });
+      // 指向門口的小箭頭
+      const cx = Math.round(base[0] - 2);
+      g.fillStyle = gfx.OUTLINE;
+      g.fillRect(cx - 2, y0 + h, 5, 1);
+      g.fillRect(cx - 1, y0 + h + 1, 3, 1);
+      g.fillRect(cx, y0 + h + 2, 1, 1);
     }
 
     bar(g, cx, y, frac, col) {

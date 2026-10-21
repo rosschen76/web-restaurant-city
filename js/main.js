@@ -6,6 +6,9 @@
   const saved = RC.state.load();
   const state = saved || RC.state.newGame();
   const game = new RC.Game(state);
+  // 上次存檔到現在的這段時間：離線期間餐廳照常營業（savedAt 為 0 代表全新遊戲）
+  const awayOnLoad = state.savedAt > 0 ? (Date.now() - state.savedAt) / 1000 : 0;
+  const offlineReport = game.catchUp(awayOnLoad);
   const canvas = document.getElementById('game');
   const view = new RC.Renderer(canvas, game);
   const ui = new RC.UI(game, view);
@@ -14,6 +17,8 @@
   RC.audio.sfxOn = state.settings.sound;
   RC.audio.musicOn = state.settings.music;
   ui.refreshHud();
+  ui.showOffline(offlineReport);
+  if (RC.state.loadStatus === 'corrupt') ui.toast('存檔讀取失敗（可能損毀或被修改過），已重新開始。舊存檔有備份。', 'bad');
 
   // 以菜色圖示當 favicon
   try {
@@ -22,14 +27,29 @@
     /* 非必要 */
   }
 
-  const save = () => {
-    if (!ui._skipSave) RC.state.save(game.s);
+  // 背景分頁不會跑遊戲，所以背景時不要定時存檔：否則存檔時間會被一直更新，
+  // 之後關閉再開啟時就算不出「離開了多久」。離開那一刻的存檔由 visibilitychange 負責。
+  const save = (force) => {
+    if (ui._skipSave) return;
+    if (document.hidden && !force) return;
+    RC.state.save(game.s);
   };
   setInterval(save, 10000);
+
+  let hiddenAt = 0;
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) save();
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      save(true);
+    } else if (hiddenAt) {
+      // 分頁回到前景：背景時 requestAnimationFrame 停了，把這段時間補算進去
+      const away = (Date.now() - hiddenAt) / 1000;
+      hiddenAt = 0;
+      last = performance.now();
+      ui.showOffline(game.catchUp(away));
+    }
   });
-  window.addEventListener('pagehide', save);
+  window.addEventListener('pagehide', () => save(false));
 
   let last = performance.now();
   let reported = false;
