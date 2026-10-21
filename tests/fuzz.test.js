@@ -61,6 +61,15 @@ function invariants(g, label) {
     }
   }
   assert.ok(Number.isFinite(g.s.coins) && g.s.coins >= 0);
+  // 餐具：髒盤子數不為負、乾淨盤子數介於 0 與總數之間；員工手上的盤子都是整數
+  assert.ok(Number.isInteger(g.s.sinkDirty) && g.s.sinkDirty >= 0, `${label}: sinkDirty 異常 ${g.s.sinkDirty}`);
+  const clean = g.cleanPlates();
+  assert.ok(clean >= 0 && clean <= g.plateTotal(), `${label}: 乾淨盤子數異常 ${clean}/${g.plateTotal()}`);
+  for (const m of g.crew) assert.ok(Number.isInteger(m.carryPlates || 0) && (m.carryPlates || 0) >= 0, `${label}: 員工手上盤子數異常`);
+  // 日夜：時鐘在 0~1440；風評在範圍內；下班的人不在工作
+  assert.ok(g.s.clock >= 0 && g.s.clock < 1440 + 1e-6, `${label}: 時鐘異常 ${g.s.clock}`);
+  assert.ok(g.s.reputation >= D.REPUTATION.min - 1e-9 && g.s.reputation <= D.REPUTATION.max + 1e-9, `${label}: 風評超出範圍`);
+  for (const m of g.crew) if (!m.onDuty) assert.ok(!m.job && !m.pay && m.cleanUid == null, `${label}: 下班的員工還有工作`);
 }
 
 /** 座位不足時補一組「桌 + 左右椅」，讓營運真的跑起來 */
@@ -84,14 +93,14 @@ function ensureSeats(g, want) {
   }
 }
 
-for (const seed of [1, 2, 3, 4, 5]) {
-  test(`模糊測試 seed=${seed}：隨機改版面 + 營運 30 分鐘`, () => {
+for (const [seed, dayMode] of [[1, false], [2, false], [3, false], [4, false], [5, false], [6, true], [7, true], [8, true]]) {
+  test(`模糊測試 seed=${seed}${dayMode ? '（日夜+排班）' : ''}：隨機改版面 + 營運 30 分鐘`, () => {
     const rng = RC.util.makeRng(seed * 7919);
     const s = RC.state.newGame(RC.util.makeRng(seed));
     s.coins = 200000;
     s.level = 20;
     for (const id of ['soymilk', 'fantuan', 'luroufan', 'boba', 'xiaolongbao']) s.dishes[id] = { cooked: 0 };
-    const g = new RC.Game(s, { seed, dayMode: false });
+    const g = new RC.Game(s, { seed, dayMode });
     g.hire(0);
     g.hire(1);
     g.s.room.stage = 2;
@@ -122,6 +131,15 @@ for (const seed of [1, 2, 3, 4, 5]) {
           g.sellItem(rng.pick(items).uid);
         } else if (roll < 0.9 && items.length) {
           g.rotateItem(rng.pick(items).uid);
+        } else if (dayMode && roll < 0.95) {
+          // 隨機調整營業時間、班表、值班店長
+          const pick = rng.int(0, 3);
+          const staff = g.s.staff;
+          if (pick === 0) g.setBusinessHours(rng.int(0, 12), rng.int(13, 24));
+          else if (pick === 1) g.setShift(rng.pick(staff).id, rng.int(0, 23));
+          else if (pick === 2) g.setAutoSchedule(rng.next() < 0.5);
+          else if (rng.next() < 0.5) g.assignManager(rng.pick(staff).id);
+          else g.clearManager();
         } else {
           ensureSeats(g, 3);
           // 保底：確保有桌椅爐灶，避免整場都在空轉
