@@ -294,8 +294,30 @@
       if (slot.innerHTML !== tabsHtml) slot.innerHTML = tabsHtml;
       // 文字輸入框正在編輯時不要重繪，避免失去焦點
       if (p.name === 'settings' && body.contains(document.activeElement) && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+      // 內容沒變就不要重繪：重繪會讓正在按下的按鈕被換掉，點擊就會丟失
+      if (p.lastHtml === html && p.lastTab === p.tab) return;
+      p.lastHtml = html;
+      p.lastTab = p.tab;
       body.innerHTML = html;
-      body.scrollTop = scroll;
+      body.scrollTop = p.lastTab === p.prevTab ? scroll : 0;
+      p.prevTab = p.tab;
+    }
+
+    /** 員工面板的即時數值（體力、狀態）原地更新，不重繪結構。 */
+    patchStaffPanel() {
+      const p = this.panel;
+      if (!p || p.name !== 'staff' || !p.overlay) return;
+      const names = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中' };
+      for (const m of this.game.crew) {
+        const q = (k) => p.overlay.querySelector(`[data-${k}="${m.id}"]`);
+        const bar = q('en');
+        if (!bar) continue;
+        bar.style.width = m.rec.energy + '%';
+        this.setText(q('entx'), '體力 ' + Math.round(m.rec.energy));
+        this.setText(q('st'), names[m.state] || '');
+        const feed = q('feed');
+        if (feed) feed.disabled = m.rec.energy >= 95;
+      }
     }
 
     owned(id) {
@@ -314,7 +336,7 @@
           const lack = s.coins < f.price;
           const own = this.owned(f.id);
           return `<div class="card ${locked ? 'locked' : ''}">
-            <div class="thumb"><img class="px" src="${AP.furnThumb(f.id, 64)}" width="64" height="64" alt=""></div>
+            <div class="thumb"><img class="px" src="${AP.furnThumb(f.id, 96)}" width="96" height="96" alt=""></div>
             <div class="nm"><span>${f.name}</span>${own ? `<span class="tag">擁有 ${own}</span>` : ''}</div>
             <div class="ds">${esc(f.desc)}${f.appeal ? `<br>魅力 +${f.appeal}` : ''}${f.speed ? `<br>烹飪速度 ×${f.speed}` : ''}</div>
             <div class="meta"><span class="price ${lack && !locked ? 'lack' : ''}">${ic('coin', 1)}${fmt(f.price)}</span>
@@ -393,7 +415,7 @@
       return `<div class="grid">${ids
         .map((id) => {
           const f = D.furniture[id];
-          return `<div class="card"><div class="thumb"><img class="px" src="${AP.furnThumb(id, 64)}" width="64" height="64" alt=""></div>
+          return `<div class="card"><div class="thumb"><img class="px" src="${AP.furnThumb(id, 96)}" width="96" height="96" alt=""></div>
             <div class="nm"><span>${f.name}</span><span class="tag">× ${s.inventory[id]}</span></div>
             <div class="meta"><button class="btn small primary" data-act="place-inv" data-id="${id}">放置</button>
             <button class="btn small" data-act="sell-inv" data-id="${id}">賣出 ${ic('coin', 1)}${fmt(Math.floor(f.price / 2))}</button></div></div>`;
@@ -430,12 +452,11 @@
       const cur = s.staff
         .map((m) => {
           const rt = g.crewById(m.id);
-          const st = rt ? { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中' }[rt.state] || '' : '';
           return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span> <span class="tag">${st}</span></div>
+            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span> <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}</div>
-            <div class="bar energy" style="max-width:180px"><i style="width:${m.energy}%"></i></div><div class="bar-label">體力 ${Math.round(m.energy)}</div></div>
-            <div><button class="btn small" data-act="feed" data-id="${m.id}" ${m.energy >= 95 ? 'disabled' : ''}>${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
+            <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
+            <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
             <button class="btn small danger" data-act="fire" data-id="${m.id}" ${s.staff.length <= 1 ? 'disabled' : ''}>解雇</button></div></div>`;
         })
         .join('');
@@ -608,7 +629,11 @@
         case 'refresh-cands': res(g.refreshCandidates(), 'click'); break;
         case 'fire': {
           const m = g.s.staff.find((x) => x.id === +id);
-          if (m) this.confirm(`確定要解雇「${m.name}」嗎？`, () => res(g.fire(+id), 'click'));
+          if (m)
+            this.confirm(`確定要解雇「${m.name}」嗎？`, () => {
+              res(g.fire(+id), 'click');
+              this.openPanel('staff');
+            });
           break;
         }
         case 'feed': res(g.feed(+id), 'buy'); break;
@@ -796,7 +821,8 @@
       el.style.top = Math.max(96, pos.y - 6) + 'px';
       if (el.hidden || force) {
         el.hidden = false;
-        el.innerHTML = `<button class="btn" data-act="item-rotate">↻ 旋轉</button><button class="btn" data-act="item-move">移動</button><button class="btn" data-act="item-store">收起</button><button class="btn danger" data-act="item-sell">賣 ${fmt(Math.floor(def.price / 2))}</button>`;
+        const canRotate = def.rot || def.cat === 'chair';
+        el.innerHTML = `${canRotate ? '<button class="btn" data-act="item-rotate">↻ 旋轉</button>' : ''}<button class="btn" data-act="item-move">移動</button><button class="btn" data-act="item-store">收起</button><button class="btn danger" data-act="item-sell">賣 ${fmt(Math.floor(def.price / 2))}</button>`;
       }
     }
 
@@ -1033,11 +1059,15 @@
       }
       this.setText(this.el.coins, fmt(Math.round(this.coinShown)));
       this.panelTimer += dt;
-      if (this.dirty || (this.panelTimer > 0.5 && this.panel && (this.panel.name === 'staff' || this.panel.name === 'menu'))) {
+      if (this.dirty) {
         this.dirty = false;
-        this.panelTimer = 0;
         this.refreshHud();
         if (this.panel && this.panel.name !== 'modal' && this.panel.name !== 'levelup') this.renderPanel();
+        this.patchStaffPanel();
+      }
+      if (this.panelTimer > 0.4) {
+        this.panelTimer = 0;
+        this.patchStaffPanel();
       }
       this.actorTimer += dt;
       if (this.actorTimer > 0.2) {

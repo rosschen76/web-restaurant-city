@@ -32,13 +32,23 @@
   window.addEventListener('pagehide', save);
 
   let last = performance.now();
+  let reported = false;
   function frame(now) {
+    // 先排下一幀：就算這一幀出錯，遊戲也不會整個停擺
+    requestAnimationFrame(frame);
     const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
     last = now;
-    game.update(dt);
-    view.render(dt);
-    ui.update(dt);
-    requestAnimationFrame(frame);
+    try {
+      game.update(dt);
+      view.render(dt);
+      ui.update(dt);
+    } catch (e) {
+      console.error(e);
+      if (!reported) {
+        reported = true;
+        ui.toast('發生未預期的錯誤。進度已自動保存，必要時請重新整理頁面。', 'bad');
+      }
+    }
   }
   requestAnimationFrame(frame);
 

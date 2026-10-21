@@ -17,7 +17,7 @@
       this.el = el;
       this.g = el.getContext('2d');
       this.game = game;
-      this.low = canvas(320, 200);
+      this.low = canvas(320, 200, true);
       this.lg = ctx(this.low);
       this.S = 3;
       this.dpr = 1;
@@ -82,7 +82,9 @@
       const layer = A.roomLayer(s.room.stage, s.room.floor, s.room.wall);
       const availW = Math.max(200, this.cssW - 12) * this.dpr;
       const availH = Math.max(160, this.cssH - TOP_UI - BOTTOM_UI) * this.dpr;
-      let S = Math.floor(Math.min(availW / (layer.c.width + 8), availH / (layer.c.height + 12)));
+      const raw = Math.min(availW / (layer.c.width + 8), availH / (layer.c.height + 12));
+      // 高密度螢幕可用 0.5 級距（不均勻幾乎看不出來）；一般螢幕維持整數倍以保持像素銳利
+      let S = this.dpr >= 2 ? Math.floor(raw * 2) / 2 : Math.floor(raw);
       S = Math.max(1, Math.min(4, S));
       this.S = S;
       const lw = Math.ceil(this.el.width / S);
@@ -141,6 +143,9 @@
       for (let i = 0; i < n; i++) this.particles.push({ x: x + (Math.random() - 0.5) * 6, y, vx: (Math.random() - 0.5) * 8, vy: -14 - Math.random() * 8, g: -4, life: 0.9, t: 0, spr: 'puff' });
     }
     stepFx(dt) {
+      // 保險：極端情況（例如分頁長時間在背景）下不讓特效無限堆積
+      if (this.particles.length > 300) this.particles.splice(0, this.particles.length - 300);
+      if (this.floaters.length > 60) this.floaters.splice(0, this.floaters.length - 60);
       for (const f of this.floaters) f.t += dt;
       this.floaters = this.floaters.filter((f) => f.t < f.life);
       for (const p of this.particles) {
@@ -205,7 +210,7 @@
       for (let y = 0; y < grid.h; y++)
         for (let x = 0; x < grid.w; x++) {
           const p = this.proj(x, y);
-          this.diamond(g, p[0], p[1], 'rgba(255,255,255,0.22)', false);
+          this.diamond(g, p[0], p[1], 'rgba(255,255,255,0.38)', false);
         }
     }
 

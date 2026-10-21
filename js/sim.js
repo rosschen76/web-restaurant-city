@@ -159,6 +159,7 @@
         this.emit('levelup', { level: s.level, reward, unlocks: D.unlocksAt(s.level) });
       }
       if (s.level >= D.MAX_LEVEL) s.xp = 0;
+      this.changed();
     }
 
     /* ───────── 數值公式 ───────── */

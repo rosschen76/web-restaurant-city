@@ -1,2 +1,88 @@
-# web-restaurant-city
-網頁版餐廳經營遊戲
+# 像素餐廳城 Pixel Restaurant City
+
+網頁版、像素風的餐廳經營遊戲，靈感來自早期 Facebook 上的 *Restaurant City*。
+擺設家具、雇用員工、學習菜色，把一間小小的台式小吃店經營成傳說中的名店。
+
+**純靜態、零相依、不需要建置**：所有像素美術（家具、人物、菜色圖示、牆壁地板）都由程式即時繪製，音效用 WebAudio 合成，沒有任何圖檔或音檔。
+
+## 開始玩
+
+- **線上**：推到 GitHub 後啟用 Pages（見下方「部署到 GitHub Pages」）
+- **本機**：直接用瀏覽器打開 `index.html` 即可；或執行 `npm start`，開啟 <http://localhost:8080>
+
+## 玩法
+
+| 想做的事 | 怎麼做 |
+| --- | --- |
+| 賺錢 | 客人吃完會在桌上留下金幣，**點一下收進口袋**（買了「收銀機」就會自動入帳） |
+| 擴充座位 | 到「商店」買桌椅。**椅子必須緊鄰桌子**，客人才會入座 |
+| 加快出餐 | 多買爐灶（員工煮菜需要空爐灶）、雇用更多員工、升級爐灶種類 |
+| 賺更多 | 在「菜單」學新菜色；同一道菜做越多熟練度越高（售價 +8%、烹飪 −5% 時間 / 級） |
+| 吸引客人 | 擺放裝飾、地毯、換地板和牆壁，提升「魅力」與餐廳星級，客人更多、售價更高 |
+| 搬家具 | 「裝潢」模式：點選家具後可旋轉／移動／收起／賣出，也可以直接拖曳 |
+| 擴建 | 「商店 → 擴建」：8×8 → 10×10 → 12×12 → 14×14 |
+
+- 員工會自己點餐 → 煮菜 → 上菜；體力用完會休息，也可以花錢餵食立刻恢復
+- 客人耐心有限：等太久會氣走；上菜越快，小費越多。偶爾會有 **VIP** 客人（收入與經驗 ×3）
+- 右上角可切換 ×1/×2/×3 速度；進度會**自動存檔**在瀏覽器（設定裡可匯出／匯入存檔）
+- 快捷鍵：`E` 裝潢　`R` 旋轉　`Esc` 取消　`Delete` 收起　`1/2/3` 速度
+
+支援桌機與手機（觸控）。
+
+## 部署到 GitHub Pages
+
+專案是純靜態檔案、全部使用相對路徑，放在 `https://<帳號>.github.io/<repo>/` 這種子路徑下也能正常運作。兩種方式擇一：
+
+**方式 A：GitHub Actions（建議，部署前會先跑測試）**
+
+1. 合併到 `main`
+2. 到 repo 的 **Settings → Pages → Build and deployment → Source**，選 **GitHub Actions**
+3. 之後每次推到 `main` 會自動跑測試並部署（見 `.github/workflows/pages.yml`），也可在 Actions 頁手動執行
+
+**方式 B：直接由分支部署**
+
+Settings → Pages → Source 選 **Deploy from a branch** → `main` / `/ (root)`。（根目錄已有 `.nojekyll`。）
+
+## 開發
+
+```bash
+npm test          # 邏輯層單元／整合／模糊測試（Node 內建 test runner，零相依）
+npm run test:e2e  # 瀏覽器端對端測試（需 Playwright：npm i -D playwright）
+npm start         # 本機靜態伺服器
+```
+
+### 專案結構
+
+```
+index.html            入口（依序載入下列腳本，不需建置）
+css/style.css         像素風 UI（以 box-shadow 做缺角邊框）
+js/
+  util.js data.js     共用工具、全部遊戲資料（菜色／家具／任務／公式）
+  world.js            格子世界：擺放檢查、A* 尋路、座位與爐灶偵測
+  state.js            存檔結構、載入驗證與修復、localStorage
+  sim.js              模擬核心：客人／員工狀態機、經濟、升級、任務
+  gfx.js              像素繪圖基礎：無鋸齒多邊形、等角方塊、描邊、點陣字型
+  art_world.js        地板／牆壁／地毯／全部家具的程式化像素美術
+  art_people.js       人物、菜色圖示、UI 圖示、特效
+  render.js           Canvas 繪圖：低解析度緩衝 + 整數倍放大、深度排序、點擊判定
+  audio.js            WebAudio 音效與 8-bit 背景音樂
+  ui.js               HUD、各面板、裝潢模式、輸入
+  main.js             啟動、主迴圈、自動存檔
+tests/                邏輯測試（sim / fuzz）與端對端測試（e2e）
+```
+
+邏輯層（`util / data / world / state / sim`）完全不碰 DOM，所以 Node 就能直接跑測試；繪圖與 UI 只讀取 `Game` 的狀態、並透過它的方法與事件互動。
+
+### 擴充內容
+
+- **新菜色**：在 `js/data.js` 的 `dishList` 加一筆，並在 `js/art_people.js` 的 `DISH` 加一張 12×12 的字串像素圖
+- **新家具**：在 `furnitureList` 加一筆，並在 `js/art_world.js` 的 `DRAW` 以等角方塊（`b.box` / `b.cyl` …）畫出來
+- **數值平衡**：集中在 `data.js`（價格、解鎖等級、升級曲線）與 `sim.js` 頂端的常數；`tests/sim.test.js` 內有一個自動試玩的經濟測試可以快速檢視節奏
+
+### 關於字型
+
+介面使用系統內建的繁體中文字型。想要像素字型的話，可以自行加入（例如 OFL 授權的 [Cubic 11](https://github.com/ACh-K/Cubic-11)），並在 `css/style.css` 加上 `@font-face { font-family: "Cubic 11"; src: url(...) }`，`--font` 已將它排在字型堆疊最前面。
+
+## 授權
+
+MIT，見 [LICENSE](LICENSE)。

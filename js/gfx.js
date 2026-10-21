@@ -5,11 +5,12 @@
 
   const OUTLINE = '#2b1d1a';
 
-  function canvas(w, h) {
+  /** 預設為 CPU 畫布（素材要讀像素做描邊）；gpu=true 用於每幀重畫的大畫布。 */
+  function canvas(w, h, gpu) {
     const c = document.createElement('canvas');
     c.width = Math.max(1, w);
     c.height = Math.max(1, h);
-    const g = c.getContext('2d');
+    const g = c.getContext('2d', gpu ? undefined : { willReadFrequently: true });
     g.imageSmoothingEnabled = false;
     return c;
   }
