@@ -207,6 +207,7 @@
     check: ['............', '..........kk', '.........kGk', '........kGGk', 'kk.....kGGk.', 'kGk...kGGk..', '.kGk.kGGk...', '..kGkGGk....', '...kGGk.....', '....kk......', '............', '............'],
     cross: ['............', '.kk......kk.', '.krk....krk.', '..krk..krk..', '...krkkrk...', '....krrk....', '...krkkrk...', '..krk..krk..', '.krk....krk.', '.kk......kk.', '............', '............'],
     heart: ['............', '..kk....kk..', '.kppk..kppk.', 'kpwppkkpppk.', 'kppppppppppk', 'kppppppppppk', '.kpppppppk..', '..kpppppk...', '...kpppk....', '....kpk.....', '.....k......', '............'],
+    note: ['............', '.....kk.....', '.....kwk....', '.....kwwk...', '.....kwwwk..', '.....kwkwk..', '.....kwk.kk.', '.....kwk....', '..kkkkwk....', '.kwwwkwk....', '.kwwwwwk....', '..kkkkk.....'],
     mover: ['.....kk.....', '....kwwk....', '...kkwwkk...', '.....ww.....', '.kk..ww..kk.', 'kwwwwwwwwwwk', 'kwwwwwwwwwwk', '.kk..ww..kk.', '.....ww.....', '...kkwwkk...', '....kwwk....', '.....kk.....'],
   };
   const iconCache = new Map();
@@ -219,13 +220,32 @@
     }
     return c;
   }
+  /** 「關閉」版本：在圖示上畫一條紅色斜線 */
+  function iconOff(name) {
+    const key = name + ':off';
+    let c = iconCache.get(key);
+    if (!c) {
+      const base = icon(name);
+      c = canvas(base.width, base.height);
+      const g = ctx(c);
+      g.globalAlpha = 0.4; // 圖示本身變淡，斜線才看得清楚
+      g.drawImage(base, 0, 0);
+      g.globalAlpha = 1;
+      for (let i = 0; i < 10; i++) {
+        g.fillStyle = '#e04a3a';
+        g.fillRect(i + 1, 10 - i, 2, 1);
+      }
+      iconCache.set(key, c);
+    }
+    return c;
+  }
   const urlCache = new Map();
   /** 給 DOM <img> 用的 data URL（放大 scale 倍） */
   function iconURL(name, scale, kind) {
     const key = (kind || 'i') + name + ':' + scale;
     let u = urlCache.get(key);
     if (!u) {
-      const src = kind === 'dish' ? dish(name) : kind === 'furn' ? null : icon(name);
+      const src = kind === 'dish' ? dish(name) : kind === 'off' ? iconOff(name) : icon(name);
       const c = canvas(src.width * scale, src.height * scale);
       ctx(c).drawImage(src, 0, 0, c.width, c.height);
       u = c.toDataURL();
@@ -309,5 +329,5 @@
     return { x: x + 1, y: y + 1, w: w - 2, h: h - 2 };
   }
 
-  RC.artPeople = { drawPerson, drawHead, dish, icon, iconURL, furnThumb, fx, bubble, ICONS_LIST: Object.keys(ICONS), DISH_IDS: Object.keys(DISH) };
+  RC.artPeople = { drawPerson, drawHead, dish, icon, iconOff, iconURL, furnThumb, fx, bubble, ICONS_LIST: Object.keys(ICONS), DISH_IDS: Object.keys(DISH) };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

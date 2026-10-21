@@ -86,7 +86,8 @@
         <div class="hud-tr">
           <div class="coin-pill pbox" id="coinpill">${ic('coin', 2)}<span id="coins">0</span></div>
           <button class="btn icon-btn" id="btn-speed" title="遊戲速度（1 / 2 / 3）">×1</button>
-          <button class="btn icon-btn" id="btn-sound" title="聲音開關"></button>
+          <button class="btn icon-btn" id="btn-sfx" title="音效開關" aria-label="音效開關"></button>
+          <button class="btn icon-btn" id="btn-music" title="音樂開關" aria-label="音樂開關"></button>
         </div>
         <div class="warn-banner pbox" id="warn" hidden></div>
         <div class="warn-banner pause-badge pbox" id="pause" hidden>⏸ 裝潢中：遊戲時間已暫停</div>
@@ -115,7 +116,8 @@
         coins: this.hud.querySelector('#coins'),
         coinpill: this.hud.querySelector('#coinpill'),
         speed: this.hud.querySelector('#btn-speed'),
-        sound: this.hud.querySelector('#btn-sound'),
+        sfx: this.hud.querySelector('#btn-sfx'),
+        music: this.hud.querySelector('#btn-music'),
         quest: this.hud.querySelector('#quest'),
         warn: this.hud.querySelector('#warn'),
         pause: this.hud.querySelector('#pause'),
@@ -145,12 +147,19 @@
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
       this.setText(this.el.speed, '×' + this.game.speed);
-      const muted = !RC.audio.sfxOn && !RC.audio.musicOn;
-      const snd = muted ? 'mute' : 'sound';
-      if (this.el.sound.dataset.i !== snd) {
-        this.el.sound.dataset.i = snd;
-        this.el.sound.innerHTML = ic(snd, 2);
+      // 音效與音樂各自一顆按鈕：開著是亮的圖示，關掉是斜線
+      const sfxIcon = RC.audio.sfxOn ? 'sound' : 'mute';
+      if (this.el.sfx.dataset.i !== sfxIcon) {
+        this.el.sfx.dataset.i = sfxIcon;
+        this.el.sfx.innerHTML = ic(sfxIcon, 2);
       }
+      const musicKey = RC.audio.musicOn ? 'on' : 'off';
+      if (this.el.music.dataset.i !== musicKey) {
+        this.el.music.dataset.i = musicKey;
+        this.el.music.innerHTML = `<img class="px" src="${AP.iconURL('note', 2, RC.audio.musicOn ? undefined : 'off')}" width="24" height="24" alt="">`;
+      }
+      this.el.sfx.classList.toggle('muted', !RC.audio.sfxOn);
+      this.el.music.classList.toggle('muted', !RC.audio.musicOn);
       this.refreshQuest();
       this.refreshBadges();
     }
@@ -541,8 +550,11 @@
         <div class="section-title">店掌櫃的名字（就是你）</div>
         <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bn" maxlength="8" value="${esc(boss ? boss.name : '')}"><button class="btn small primary" data-act="rename-boss">儲存</button></div>
         <div class="section-title">聲音</div>
-        <button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
-        <button class="btn small ${A.musicOn ? 'primary' : ''}" data-act="toggle-music">音樂：${A.musicOn ? '開' : '關'}</button>
+        <div class="vol-row"><button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
+          <input type="range" min="0" max="100" value="${Math.round(A.sfxVol * 100)}" data-vol="sfx" aria-label="音效音量"><span class="vol-label" data-vol-label>${Math.round(A.sfxVol * 100)}%</span></div>
+        <div class="vol-row"><button class="btn small ${A.musicOn ? 'primary' : ''}" data-act="toggle-music">音樂：${A.musicOn ? '開' : '關'}</button>
+          <input type="range" min="0" max="100" value="${Math.round(A.musicVol * 100)}" data-vol="music" aria-label="音樂音量"><span class="vol-label" data-vol-label>${Math.round(A.musicVol * 100)}%</span></div>
+        <div class="sub">音效和音樂是兩個獨立的開關與音量，右上角也各有一顆按鈕。瀏覽器需要先點擊一下頁面才能出聲。</div>
         <div class="section-title">遊戲速度</div>
         ${[1, 2, 3].map((v) => `<button class="btn small ${g.speed === v ? 'primary' : ''}" data-act="speed" data-v="${v}">×${v}</button>`).join('')}
         <div class="section-title">操作說明</div>
@@ -716,7 +728,7 @@
           break;
         }
         case 'toggle-sfx': A.setSfx(!A.sfxOn); this.persistAudio(); A.sfx('click'); this.refreshHud(); this.renderPanel(); break;
-        case 'toggle-music': A.setMusic(!A.musicOn); this.persistAudio(); this.refreshHud(); this.renderPanel(); break;
+        case 'toggle-music': A.unlock(); A.setMusic(!A.musicOn); this.persistAudio(); this.refreshHud(); this.renderPanel(); break;
         case 'speed': this.setSpeed(+el.dataset.v); break;
         case 'copy-save': {
           const t = document.getElementById('export');
@@ -798,6 +810,8 @@
       const s = this.game.s;
       s.settings.sound = RC.audio.sfxOn;
       s.settings.music = RC.audio.musicOn;
+      s.settings.sfxVol = RC.audio.sfxVol;
+      s.settings.musicVol = RC.audio.musicVol;
     }
 
     setSpeed(v) {
@@ -1021,14 +1035,38 @@
         this.setSpeed(this.game.speed % 3 + 1);
         RC.audio.sfx('click');
       });
-      this.el.sound.addEventListener('click', () => {
+      // 音效、音樂兩顆開關互相獨立
+      this.el.sfx.addEventListener('click', () => {
         const A = RC.audio;
-        const mute = A.sfxOn || A.musicOn;
-        A.setSfx(!mute);
-        A.setMusic(!mute);
+        A.setSfx(!A.sfxOn);
+        this.persistAudio();
+        A.sfx('click'); // 剛打開時給一聲回饋；關掉時這行不會出聲
+        this.refreshHud();
+        if (this.panel && this.panel.name === 'settings') this.renderPanel();
+      });
+      this.el.music.addEventListener('click', () => {
+        const A = RC.audio;
+        A.unlock();
+        A.setMusic(!A.musicOn);
         this.persistAudio();
         A.sfx('click');
         this.refreshHud();
+        if (this.panel && this.panel.name === 'settings') this.renderPanel();
+      });
+      // 設定裡的音量滑桿
+      document.body.addEventListener('input', (e) => {
+        const el = e.target.closest && e.target.closest('[data-vol]');
+        if (!el) return;
+        const A = RC.audio;
+        const v = el.value / 100;
+        if (el.dataset.vol === 'sfx') A.setSfxVol(v);
+        else A.setMusicVol(v);
+        const lab = el.parentElement.querySelector('[data-vol-label]');
+        if (lab) lab.textContent = Math.round(v * 100) + '%';
+        this.persistAudio();
+      });
+      document.body.addEventListener('change', (e) => {
+        if (e.target.closest && e.target.closest('[data-vol=sfx]')) RC.audio.sfx('coin'); // 放開滑桿時試聽一下
       });
       window.addEventListener('keydown', (e) => this.onKey(e));
       window.addEventListener('resize', () => {

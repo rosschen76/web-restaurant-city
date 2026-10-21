@@ -73,7 +73,7 @@
       candidates: [],
       quest: { i: 0 },
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
-      settings: { sound: true, music: true, speed: 1 },
+      settings: { sound: true, music: true, sfxVol: 0.8, musicVol: 0.7, speed: 1 },
       flags: { welcomed: false },
       savedAt: 0,
     };
@@ -196,7 +196,13 @@
       playTime: num(rs.playTime, 0, 0, 1e10),
     };
     const se = raw.settings || {};
-    s.settings = { sound: se.sound !== false, music: se.music !== false, speed: [1, 2, 3].includes(se.speed) ? se.speed : 1 };
+    s.settings = {
+      sound: se.sound !== false,
+      music: se.music !== false,
+      sfxVol: num(se.sfxVol, 0.8, 0, 1),
+      musicVol: num(se.musicVol, 0.7, 0, 1),
+      speed: [1, 2, 3].includes(se.speed) ? se.speed : 1,
+    };
     s.flags = { welcomed: !!(raw.flags && raw.flags.welcomed) };
     s.savedAt = num(raw.savedAt, 0, 0, 1e15);
     return s;

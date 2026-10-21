@@ -158,6 +158,45 @@ await scenario('點擊頭上有金幣的客人：請掌櫃優先結帳', async (
   assert.ok(await page.locator('#actor').isVisible(), '同時顯示客人資訊卡');
 });
 
+await scenario('音效與音樂是兩個獨立的開關，各自有按鈕、音量，並記在存檔裡', async (page) => {
+  await page.click('[data-act=welcome-ok]'); // 這次點擊同時解鎖音訊
+  const bus = () => G(page, () => { const A = window.RC.audio; return { sfx: A.sfxBus.gain.value, music: A.musicBus.gain.value, sfxOn: A.sfxOn, musicOn: A.musicOn, playing: A.playing, ctx: A.ctx.state }; });
+  await page.waitForTimeout(300);
+  let b = await bus();
+  assert.equal(b.ctx, 'running');
+  assert.ok(b.sfxOn && b.musicOn && b.playing, '預設兩者都開、音樂在播');
+  assert.ok(b.music > 0.5 && b.sfx > 0.5, '兩條匯流排都有音量');
+  assert.equal(await page.locator('#btn-sfx').isVisible() && await page.locator('#btn-music').isVisible(), true, '右上角有兩顆按鈕');
+
+  await page.click('#btn-sfx'); // 只關音效
+  await page.waitForTimeout(300);
+  b = await bus();
+  assert.equal(b.sfxOn, false); assert.equal(b.musicOn, true); assert.equal(b.playing, true, '關音效不影響音樂');
+  assert.ok(b.sfx < 0.01 && b.music > 0.5);
+
+  await page.click('#btn-sfx'); // 音效再打開，改關音樂
+  await page.click('#btn-music');
+  await page.waitForTimeout(400);
+  b = await bus();
+  assert.equal(b.sfxOn, true); assert.equal(b.musicOn, false); assert.equal(b.playing, false, '音樂停止排程');
+  assert.ok(b.music < 0.01 && b.sfx > 0.5, '關音樂不影響音效');
+
+  // 設定面板的滑桿各自獨立
+  await page.click('.bottom-bar [data-act=open-settings]');
+  await page.evaluate(() => { const el = document.querySelector('[data-vol=music]'); el.value = 30; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  const vols = await G(page, () => ({ s: window.RC.audio.sfxVol, m: window.RC.audio.musicVol, saved: window.__game.game.s.settings }));
+  assert.equal(vols.m, 0.3); assert.equal(vols.s, 0.8, '調音樂音量不影響音效音量');
+  assert.equal(vols.saved.musicVol, 0.3); assert.equal(vols.saved.music, false); assert.equal(vols.saved.sound, true);
+  await page.keyboard.press('Escape');
+
+  // 重新載入後設定保持
+  await G(page, () => window.RC.state.save(window.__game.game.s));
+  await page.reload();
+  await page.waitForSelector('#game');
+  const after = await G(page, () => { const A = window.RC.audio; return { sfxOn: A.sfxOn, musicOn: A.musicOn, musicVol: A.musicVol }; });
+  assert.deepEqual(after, { sfxOn: true, musicOn: false, musicVol: 0.3 });
+});
+
 await scenario('進入裝潢模式時遊戲時間暫停，離開後恢復', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await page.waitForTimeout(500);
