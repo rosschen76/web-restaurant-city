@@ -16,6 +16,8 @@
   // 套用存檔裡的音訊偏好（實際出聲要等第一次使用者操作）
   RC.audio.sfxOn = state.settings.sound;
   RC.audio.musicOn = state.settings.music;
+  RC.audio.sfxVol = state.settings.sfxVol;
+  RC.audio.musicVol = state.settings.musicVol;
   ui.refreshHud();
   ui.showOffline(offlineReport);
   if (RC.state.loadStatus === 'corrupt') ui.toast('存檔讀取失敗（可能損毀或被修改過），已重新開始。舊存檔有備份。', 'bad');

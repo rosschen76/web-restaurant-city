@@ -5,12 +5,20 @@
 
   const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
 
+  // 合成出來的原始波形振幅很小，各條匯流排乘上基準增益後再交給限幅器，避免太小聲或爆音
+  const SFX_BASE = 4.5;
+  const MUSIC_BASE = 2;
+
   const audio = {
     ctx: null,
+    // 音效與音樂是兩個完全獨立的開關與音量
     sfxOn: true,
     musicOn: true,
+    sfxVol: 0.8,
+    musicVol: 0.7,
     master: null,
-    musicGain: null,
+    sfxBus: null,
+    musicBus: null,
     noiseBuf: null,
     playing: false,
     step: 0,
@@ -27,12 +35,22 @@
         } catch (e) {
           return false;
         }
+        // 音效匯流排、音樂匯流排 → 主音量 → 限幅器 → 喇叭
+        const comp = this.ctx.createDynamicsCompressor();
+        comp.threshold.value = -12;
+        comp.knee.value = 12;
+        comp.ratio.value = 8;
+        comp.attack.value = 0.003;
+        comp.release.value = 0.15;
+        comp.connect(this.ctx.destination);
         this.master = this.ctx.createGain();
-        this.master.gain.value = 0.6;
-        this.master.connect(this.ctx.destination);
-        this.musicGain = this.ctx.createGain();
-        this.musicGain.gain.value = 0.5;
-        this.musicGain.connect(this.master);
+        this.master.gain.value = 1;
+        this.master.connect(comp);
+        this.sfxBus = this.ctx.createGain();
+        this.sfxBus.connect(this.master);
+        this.musicBus = this.ctx.createGain();
+        this.musicBus.connect(this.master);
+        this.applyVolumes();
         const n = this.ctx.sampleRate * 0.2;
         this.noiseBuf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
         const d = this.noiseBuf.getChannelData(0);
@@ -54,7 +72,7 @@
       g.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
       g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
       o.connect(g);
-      g.connect(dest || this.master);
+      g.connect(dest || this.sfxBus);
       o.start(t0);
       o.stop(t0 + dur + 0.02);
     },
@@ -71,7 +89,7 @@
       f.frequency.value = 6000;
       s.connect(f);
       f.connect(g);
-      g.connect(dest || this.master);
+      g.connect(dest || this.sfxBus);
       s.start(t0);
       s.stop(t0 + dur + 0.02);
     },
@@ -120,12 +138,29 @@
     },
 
     /* ── 背景音樂：C – Am – F – G 的輕快循環 ── */
+    /** 把開關與音量套用到匯流排（關掉時直接把該匯流排靜音，連殘響也一起停） */
+    applyVolumes() {
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      this.sfxBus.gain.setTargetAtTime(this.sfxOn ? this.sfxVol * SFX_BASE : 0, t, 0.02);
+      this.musicBus.gain.setTargetAtTime(this.musicOn ? this.musicVol * MUSIC_BASE : 0, t, 0.05);
+    },
     setSfx(on) {
       this.sfxOn = !!on;
+      this.applyVolumes();
     },
     setMusic(on) {
       this.musicOn = !!on;
+      this.applyVolumes();
       this.syncMusic();
+    },
+    setSfxVol(v) {
+      this.sfxVol = Math.max(0, Math.min(1, +v || 0));
+      this.applyVolumes();
+    },
+    setMusicVol(v) {
+      this.musicVol = Math.max(0, Math.min(1, +v || 0));
+      this.applyVolumes();
     },
     syncMusic() {
       if (!this.ctx) return;
@@ -166,7 +201,7 @@
         [77, null, 81, null, 77, 76, 72, null],
         [79, null, 83, null, 79, 77, 74, null],
       ][bar];
-      const out = this.musicGain;
+      const out = this.musicBus;
       if (k === 0 || k === 4) this.tone(midi(root - 12), t, d * 1.8, 'triangle', 0.16, null, out);
       if (k === 2 || k === 6) this.tone(midi(root - 5), t, d * 0.9, 'triangle', 0.09, null, out);
       this.tone(midi(root + 12 + arp[k]), t, d * 0.8, 'square', 0.018, null, out);

@@ -195,3 +195,17 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; }
 }
+
+/* 裝潢模式：提醒玩家時間已暫停 */
+.pause-badge { background: #cfe8ff; }
+
+/* 音效 / 音樂 獨立按鈕與音量滑桿 */
+.icon-btn.muted { filter: grayscale(0.6) brightness(0.9); }
+.vol-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.vol-row input[type="range"] { flex: 1; min-width: 80px; accent-color: var(--brand); touch-action: pan-x; }
+.vol-label { width: 3.2em; text-align: right; font-size: 13px; }
+@media (max-width: 560px) {
+  /* 右上角多了一顆按鈕：金幣在上、按鈕在下，避免和左側資訊卡擠在一起 */
+  .hud-tr { flex-wrap: wrap; justify-content: flex-end; width: 150px; row-gap: 2px; }
+  .hud-tr .coin-pill { flex: 1 0 100%; }
+}

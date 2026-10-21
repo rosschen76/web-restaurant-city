@@ -26,7 +26,7 @@
     return u;
   }
 
-  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_coin: '去收錢', collecting: '收款中' };
+  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_pay: '去結帳', paying: '收款中' };
   const PANELS = {
     shop: { title: '商店', icon: 'shop' },
     inv: { title: '倉庫', icon: 'box' },
@@ -86,9 +86,11 @@
         <div class="hud-tr">
           <div class="coin-pill pbox" id="coinpill">${ic('coin', 2)}<span id="coins">0</span></div>
           <button class="btn icon-btn" id="btn-speed" title="遊戲速度（1 / 2 / 3）">×1</button>
-          <button class="btn icon-btn" id="btn-sound" title="聲音開關"></button>
+          <button class="btn icon-btn" id="btn-sfx" title="音效開關" aria-label="音效開關"></button>
+          <button class="btn icon-btn" id="btn-music" title="音樂開關" aria-label="音樂開關"></button>
         </div>
         <div class="warn-banner pbox" id="warn" hidden></div>
+        <div class="warn-banner pause-badge pbox" id="pause" hidden>⏸ 裝潢中：遊戲時間已暫停</div>
         <div class="bottom-bar pbox" id="bottom">
           <button class="btn nav-btn" data-act="open-shop">${ic('shop', 2)}商店</button>
           <button class="btn nav-btn" data-act="toggle-edit">${ic('hammer', 2)}裝潢</button>
@@ -114,9 +116,11 @@
         coins: this.hud.querySelector('#coins'),
         coinpill: this.hud.querySelector('#coinpill'),
         speed: this.hud.querySelector('#btn-speed'),
-        sound: this.hud.querySelector('#btn-sound'),
+        sfx: this.hud.querySelector('#btn-sfx'),
+        music: this.hud.querySelector('#btn-music'),
         quest: this.hud.querySelector('#quest'),
         warn: this.hud.querySelector('#warn'),
+        pause: this.hud.querySelector('#pause'),
         bottom: this.hud.querySelector('#bottom'),
         editbar: this.hud.querySelector('#editbar'),
         edithint: this.hud.querySelector('#edithint'),
@@ -143,12 +147,19 @@
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
       this.setText(this.el.speed, '×' + this.game.speed);
-      const muted = !RC.audio.sfxOn && !RC.audio.musicOn;
-      const snd = muted ? 'mute' : 'sound';
-      if (this.el.sound.dataset.i !== snd) {
-        this.el.sound.dataset.i = snd;
-        this.el.sound.innerHTML = ic(snd, 2);
+      // 音效與音樂各自一顆按鈕：開著是亮的圖示，關掉是斜線
+      const sfxIcon = RC.audio.sfxOn ? 'sound' : 'mute';
+      if (this.el.sfx.dataset.i !== sfxIcon) {
+        this.el.sfx.dataset.i = sfxIcon;
+        this.el.sfx.innerHTML = ic(sfxIcon, 2);
       }
+      const musicKey = RC.audio.musicOn ? 'on' : 'off';
+      if (this.el.music.dataset.i !== musicKey) {
+        this.el.music.dataset.i = musicKey;
+        this.el.music.innerHTML = `<img class="px" src="${AP.iconURL('note', 2, RC.audio.musicOn ? undefined : 'off')}" width="24" height="24" alt="">`;
+      }
+      this.el.sfx.classList.toggle('muted', !RC.audio.sfxOn);
+      this.el.music.classList.toggle('muted', !RC.audio.musicOn);
       this.refreshQuest();
       this.refreshBadges();
     }
@@ -201,9 +212,11 @@
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
       else if (g.queuePeople() >= 4) msg = `門外有 ${g.queuePeople()} 人在候位：增加桌椅（或更大的桌子）可以讓更多人入座。`;
       else if (g.dirty.size >= 3) msg = '桌上的餐具堆積了，雇用更多員工幫忙收桌子吧。';
-      else if (Object.keys(g.s.drops).length >= 4) msg = '桌上有好幾堆金幣，點一下讓掌櫃去收（買收銀機可以自動入帳）。';
+      else if (g.customers.filter((c) => c.state === 'wait_pay').length >= 3) msg = '好幾位客人等著結帳，掌櫃忙不過來：多雇員工分擔煮菜上菜，讓掌櫃專心收款（也可以買收銀機）。';
       const el = this.el.warn;
-      if (msg) {
+      if (this.edit) {
+        el.hidden = true;
+      } else if (msg) {
         this.setText(el, '⚠ ' + msg);
         el.hidden = false;
       } else el.hidden = true;
@@ -459,7 +472,7 @@
           return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">店掌櫃・你</span> <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除</div>
-            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子。<b>桌上的金幣只有他能收</b>。</div></div>
+            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
@@ -537,12 +550,15 @@
         <div class="section-title">店掌櫃的名字（就是你）</div>
         <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bn" maxlength="8" value="${esc(boss ? boss.name : '')}"><button class="btn small primary" data-act="rename-boss">儲存</button></div>
         <div class="section-title">聲音</div>
-        <button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
-        <button class="btn small ${A.musicOn ? 'primary' : ''}" data-act="toggle-music">音樂：${A.musicOn ? '開' : '關'}</button>
+        <div class="vol-row"><button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
+          <input type="range" min="0" max="100" value="${Math.round(A.sfxVol * 100)}" data-vol="sfx" aria-label="音效音量"><span class="vol-label" data-vol-label>${Math.round(A.sfxVol * 100)}%</span></div>
+        <div class="vol-row"><button class="btn small ${A.musicOn ? 'primary' : ''}" data-act="toggle-music">音樂：${A.musicOn ? '開' : '關'}</button>
+          <input type="range" min="0" max="100" value="${Math.round(A.musicVol * 100)}" data-vol="music" aria-label="音樂音量"><span class="vol-label" data-vol-label>${Math.round(A.musicVol * 100)}%</span></div>
+        <div class="sub">音效和音樂是兩個獨立的開關與音量，右上角也各有一顆按鈕。瀏覽器需要先點擊一下頁面才能出聲。</div>
         <div class="section-title">遊戲速度</div>
         ${[1, 2, 3].map((v) => `<button class="btn small ${g.speed === v ? 'primary' : ''}" data-act="speed" data-v="${v}">×${v}</button>`).join('')}
         <div class="section-title">操作說明</div>
-        <div class="sub" style="line-height:1.7">點擊桌上的金幣，店掌櫃會走過去收 · 點擊員工／客人查看狀態<br>「裝潢」模式：點選家具後可旋轉、移動（也可直接拖曳）、收起、賣出<br>快捷鍵：E 裝潢　R 旋轉　Esc 取消　Delete 收起　1/2/3 速度</div>`;
+        <div class="sub" style="line-height:1.7">客人吃完頭上會出現金幣，店掌櫃會過去用電子支付收款（點那位客人可以請掌櫃優先處理）· 點擊員工／客人查看狀態<br>「裝潢」模式：點選家具後可旋轉、移動（也可直接拖曳）、收起、賣出<br>快捷鍵：E 裝潢　R 旋轉　Esc 取消　Delete 收起　1/2/3 速度</div>`;
     }
 
     /* ───────── 彈出視窗 ───────── */
@@ -563,7 +579,7 @@
         <p>你的小吃店今天開張了。你就是店裡的<b>店掌櫃</b>，把它經營成傳說中的名店吧！</p>
         <ul><li>客人有單人也有成群來，<b>不同組不併桌</b>；沒空桌就在門外候位</li>
         <li>員工與掌櫃會點餐、煮菜、上菜，客人走後桌上會留下餐具，要收拾完才能再坐</li>
-        <li>客人吃完會在桌上留下金幣，<b>點一下，店掌櫃會走過去收</b>（只有他能收）</li>
+        <li>客人吃完頭上會出現金幣，<b>店掌櫃會走到他面前電子支付收款</b>（只有他能收）；收完款客人才會離開、座位才會空出來</li>
         <li>到「商店」買桌椅、爐灶與裝飾，椅子要<b>緊鄰桌子</b></li>
         <li>到「菜單」學新菜色，「員工」雇用更多幫手；進度會自動存檔，離開期間也會替你賺錢</li></ul>
         <div class="section-title" style="margin-top:6px">幫你的店掌櫃取個名字</div>
@@ -590,15 +606,14 @@
       const dur = mins >= 60 ? `${Math.floor(mins / 60)} 小時 ${mins % 60} 分` : `${mins} 分鐘`;
       const lines = [];
       lines.push(`服務了 <b>${fmt(r.served)}</b> 位客人`);
-      if (r.earned > 0) lines.push(`收銀機入帳 ${ic('coin', 1)} <b>${fmt(r.earned)}</b>`);
-      if (r.pending > 0) lines.push(`桌上有 ${ic('coin', 1)} <b>${fmt(r.pending)}</b> 等你點擊，讓店掌櫃去收`);
+      if (r.earned > 0) lines.push(`店掌櫃替客人收了 ${ic('coin', 1)} <b>${fmt(r.earned)}</b>`);
       if (r.levelTo > r.levelFrom) lines.push(`餐廳升到 <b>Lv.${r.levelTo}</b>，獲得升級獎勵 ${ic('coin', 1)} ${fmt(r.levelReward)}`);
       if (r.walkouts + r.angry > 0) lines.push(`${fmt(r.walkouts + r.angry)} 組客人沒吃到就走了（桌椅或人手不足）`);
       const note = r.capped ? '離開太久了，最多只計算 8 小時。' : '';
       this.modal(`<div class="lvup"><h2 style="font-size:22px">歡迎回來！</h2>
         <div>你離開了 ${dur}，店裡一直有人照看</div>
         <div class="list">${lines.map((l) => `<div>✦ ${l}</div>`).join('')}</div>
-        <div class="sub">離線時只以 ${Math.round(D.OFFLINE.efficiency * 100)}% 的效率營業，且沒有人幫你收金幣。${note}</div>
+        <div class="sub">離線時只以 ${Math.round(D.OFFLINE.efficiency * 100)}% 的效率營業。${note}</div>
         <div style="margin-top:8px"><button class="btn primary" data-act="lvup-ok">收下</button></div></div>`);
       this.panel.name = 'levelup';
       RC.audio.sfx('quest');
@@ -713,7 +728,7 @@
           break;
         }
         case 'toggle-sfx': A.setSfx(!A.sfxOn); this.persistAudio(); A.sfx('click'); this.refreshHud(); this.renderPanel(); break;
-        case 'toggle-music': A.setMusic(!A.musicOn); this.persistAudio(); this.refreshHud(); this.renderPanel(); break;
+        case 'toggle-music': A.unlock(); A.setMusic(!A.musicOn); this.persistAudio(); this.refreshHud(); this.renderPanel(); break;
         case 'speed': this.setSpeed(+el.dataset.v); break;
         case 'copy-save': {
           const t = document.getElementById('export');
@@ -775,6 +790,17 @@
           if (r.ok) this.deselect();
           break;
         }
+        case 'rush-pay': {
+          const r = g.rushPay(+id);
+          if (!r.ok) {
+            A.sfx('error');
+            this.toast(r.msg, 'bad');
+          } else {
+            A.sfx('click');
+            this.toast('掌櫃會優先去結帳', 'good');
+          }
+          break;
+        }
         case 'actor-close': this.actor = null; this.view.selectedActor = null; this.updateActor(true); break;
         default:
       }
@@ -784,6 +810,8 @@
       const s = this.game.s;
       s.settings.sound = RC.audio.sfxOn;
       s.settings.music = RC.audio.musicOn;
+      s.settings.sfxVol = RC.audio.sfxVol;
+      s.settings.musicVol = RC.audio.musicVol;
     }
 
     setSpeed(v) {
@@ -798,6 +826,10 @@
     setEdit(on) {
       this.edit = on;
       this.view.edit = on;
+      // 裝潢時遊戲時間暫停：客人、員工、計時全部凍結，慢慢擺不怕客人氣走
+      this.game.paused = on;
+      this.el.pause.hidden = !on;
+      if (on) this.el.warn.hidden = true;
       if (!on) {
         this.cancelPlacing();
         this.deselect();
@@ -955,13 +987,16 @@
         if (this.actorKey !== key) {
           this.actorKey = key;
           el.innerHTML = `<span class="x" data-act="actor-close">✕</span><h4><img class="px" src="${avatar(c.look, false)}" width="20" height="36" alt=""><span>${c.vip ? esc(c.vipTitle) : '客人'}</span>${c.vip ? '<span class="tag gold">VIP ×3</span>' : ''}</h4>
-            <div class="sub" data-f="st"></div><div class="bar"><i data-f="p"></i></div><div class="bar-label">耐心</div>`;
+            <div class="sub" data-f="st"></div><div class="bar"><i data-f="p"></i></div><div class="bar-label">耐心</div>
+            <button class="btn small warn" data-act="rush-pay" data-id="${c.id}" data-f="rush" hidden>請掌櫃優先結帳</button>`;
           el.hidden = false;
         }
         const party = g.parties.find((x) => x.id === c.party);
-        const st = ({ enter: '走向座位', browse: '看菜單中', wait_order: '等待點餐', ordering: '正在點餐', wait_food: '等待上菜', eat: '用餐中', wait_party: '等同伴吃完', leave: '準備離開' }[c.state] || '') + (party && party.size > 1 ? `　同行 ${party.size} 人` : '');
+        const st = ({ enter: '走向座位', browse: '看菜單中', wait_order: '等待點餐', ordering: '正在點餐', wait_food: '等待上菜', eat: '用餐中', wait_pay: '吃完了，等結帳', leave: '準備離開' }[c.state] || '') + (party && party.size > 1 ? `　同行 ${party.size} 人` : '');
         const want = c.dish ? `　想吃：${D.dishes[c.dish].name}` : '';
         this.setText(el.querySelector('[data-f=st]'), st + want);
+        const rush = el.querySelector('[data-f=rush]');
+        if (rush) rush.hidden = !(c.state === 'wait_pay' && !c.rush && c.payBy == null);
         const p = el.querySelector('[data-f=p]');
         p.style.width = Math.max(0, Math.min(1, c.p)) * 100 + '%';
         p.style.background = c.p > 0.55 ? '' : c.p > 0.25 ? '#f2c94c' : '#e8493a';
@@ -1000,14 +1035,38 @@
         this.setSpeed(this.game.speed % 3 + 1);
         RC.audio.sfx('click');
       });
-      this.el.sound.addEventListener('click', () => {
+      // 音效、音樂兩顆開關互相獨立
+      this.el.sfx.addEventListener('click', () => {
         const A = RC.audio;
-        const mute = A.sfxOn || A.musicOn;
-        A.setSfx(!mute);
-        A.setMusic(!mute);
+        A.setSfx(!A.sfxOn);
+        this.persistAudio();
+        A.sfx('click'); // 剛打開時給一聲回饋；關掉時這行不會出聲
+        this.refreshHud();
+        if (this.panel && this.panel.name === 'settings') this.renderPanel();
+      });
+      this.el.music.addEventListener('click', () => {
+        const A = RC.audio;
+        A.unlock();
+        A.setMusic(!A.musicOn);
         this.persistAudio();
         A.sfx('click');
         this.refreshHud();
+        if (this.panel && this.panel.name === 'settings') this.renderPanel();
+      });
+      // 設定裡的音量滑桿
+      document.body.addEventListener('input', (e) => {
+        const el = e.target.closest && e.target.closest('[data-vol]');
+        if (!el) return;
+        const A = RC.audio;
+        const v = el.value / 100;
+        if (el.dataset.vol === 'sfx') A.setSfxVol(v);
+        else A.setMusicVol(v);
+        const lab = el.parentElement.querySelector('[data-vol-label]');
+        if (lab) lab.textContent = Math.round(v * 100) + '%';
+        this.persistAudio();
+      });
+      document.body.addEventListener('change', (e) => {
+        if (e.target.closest && e.target.closest('[data-vol=sfx]')) RC.audio.sfx('coin'); // 放開滑桿時試聽一下
       });
       window.addEventListener('keydown', (e) => this.onKey(e));
       window.addEventListener('resize', () => {
@@ -1112,13 +1171,11 @@
       if (this.edit) return;
       if (ptr && ptr.moved) return;
       const hit = this.view.pick(p.x, p.y);
-      if (hit && hit.type === 'drop') {
-        const r = this.game.requestCollect(hit.tx, hit.ty);
-        if (!r.ok) {
-          RC.audio.sfx('error');
-          this.toast(r.msg, 'bad');
-        } else if (!r.queued) RC.audio.sfx('click');
-      } else if (hit && (hit.type === 'staff' || hit.type === 'customer')) {
+      if (hit && (hit.type === 'staff' || hit.type === 'customer')) {
+        if (hit.type === 'customer') {
+          const c = this.game.customerById(hit.id);
+          if (c && c.state === 'wait_pay') this.game.rushPay(c.id); // 點頭上有金幣的客人：請掌櫃優先去結帳
+        }
         RC.audio.sfx('click');
         this.showActor(hit.type, hit.id);
       } else if (this.actor) {

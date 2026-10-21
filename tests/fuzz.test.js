@@ -34,9 +34,15 @@ function invariants(g, label) {
   // 一張椅子只坐一個人；同組要嘛都在離開、要嘛都沒有
   const seated = g.customers.filter((c) => c.state !== 'leave').map((c) => c.seat);
   assert.equal(new Set(seated).size, seated.length, `${label}: 兩位客人坐同一張椅子`);
-  const byParty = new Map();
-  for (const c of g.customers) (byParty.get(c.party) || byParty.set(c.party, []).get(c.party)).push(c.state);
-  for (const st of byParty.values()) if (st.includes('leave')) assert.ok(st.every((x) => x === 'leave'), `${label}: 同組有人離開、有人還在 ${st}`);
+  // 離開的客人一定已付過錢（氣走的除外）；等結帳的客人座位必須仍被占用
+  for (const c of g.customers) {
+    if (c.state === 'wait_pay') assert.equal(g.seatTaken.get(c.seat), c.id, `${label}: 等結帳的客人座位被釋放了`);
+    if (c.state === 'leave' && !c.angry && c.dish && c.t === 0) assert.ok(c.paid > 0 || c.party != null, `${label}: 沒付錢就離開`);
+    if (c.payBy != null) {
+      const b = g.crewById(c.payBy);
+      assert.ok(b && b.boss && b.pay && b.pay.cid === c.id, `${label}: 結帳認領不一致`);
+    }
+  }
   assert.ok(g.queuePeople() <= RC.data.QUEUE_MAX_PEOPLE, `${label}: 候位超過上限`);
   // 桌子占用記錄必須指向還在場的團體
   const pids = new Set(g.parties.map((p) => p.id));
@@ -48,7 +54,11 @@ function invariants(g, label) {
   }
   for (const m of g.crew) {
     if (m.cleanUid != null) assert.equal(g.dirty.get(m.cleanUid) && g.dirty.get(m.cleanUid).claimedBy, m.id, `${label}: 員工收桌對象不一致`);
-    if (m.errand) assert.ok(m.boss, `${label}: 只有掌櫃能收錢`);
+    if (m.pay) {
+      assert.ok(m.boss, `${label}: 只有掌櫃能收款`);
+      const pc = g.customerById(m.pay.cid);
+      assert.ok(pc && pc.payBy === m.id, `${label}: 掌櫃收款對象不一致`);
+    }
   }
   assert.ok(Number.isFinite(g.s.coins) && g.s.coins >= 0);
 }
@@ -84,7 +94,6 @@ for (const seed of [1, 2, 3, 4, 5]) {
     const g = new RC.Game(s, { seed });
     g.hire(0);
     g.hire(1);
-    g.requestCollect(3, 4);
     g.s.room.stage = 2;
     g.rebuild();
     const catalog = D.furnitureList;
@@ -114,7 +123,6 @@ for (const seed of [1, 2, 3, 4, 5]) {
         } else if (roll < 0.9 && items.length) {
           g.rotateItem(rng.pick(items).uid);
         } else {
-          for (const k of Object.keys(g.s.drops)) g.requestCollect(...k.split(',').map(Number));
           ensureSeats(g, 3);
           // 保底：確保有桌椅爐灶，避免整場都在空轉
           if (!g.stoves.length) { g.buyFurniture('stove_gas'); for (let y = 0; y < grid.h; y++) for (let x = 0; x < grid.w; x++) if (g.placeFromInventory('stove_gas', x, y, 0).ok) { y = 99; break; } }

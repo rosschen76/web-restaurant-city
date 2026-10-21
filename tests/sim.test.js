@@ -47,27 +47,35 @@ test('完整營運循環：客人入座 → 點餐 → 烹飪 → 上菜 → 付
   g.on('served', () => served.push(1));
   run(g, 120);
   assert.ok(g.s.stats.served >= 3, '應該至少服務 3 位，實際 ' + g.s.stats.served);
-  assert.ok(Object.values(g.s.drops).reduce((a, b) => a + b, 0) > 0, '桌上應有未收的金幣');
+  assert.ok(g.s.stats.earned > 0, '客人付款後金幣入帳');
+  assert.ok(g.s.stats.collects >= 3, '掌櫃結了至少 3 次帳');
   assert.ok(g.s.dishes.danbing.cooked >= 3);
   assert.equal(served.length, g.s.stats.served);
 });
 
-test('點擊收款會入帳；收銀機則自動入帳', () => {
+test('結帳入帳：金幣只在客人付款時增加，且與累計收入一致', () => {
   const g = mk(7);
-  run(g, 60);
-  const key = Object.keys(g.s.drops)[0];
-  assert.ok(key);
-  const before = g.s.coins;
-  const amt = g.s.drops[key];
-  const [x, y] = key.split(',').map(Number);
-  assert.equal(g.collect(x, y).ok, true);
-  assert.equal(g.s.coins, before + amt);
-  assert.equal(g.collect(x, y).ok, false);
+  const start = g.s.coins;
+  run(g, 90);
+  assert.ok(g.s.stats.earned > 0);
+  assert.equal(g.s.coins - start - g.s.stats.earned - levelRewards(g), 0, '金幣增量 = 累計收入 + 升級獎勵');
+});
 
-  const g2 = mk(7, (s) => s.items.push({ uid: 99, id: 'register', x: 7, y: 7, rot: 0 }));
-  run(g2, 60);
-  assert.equal(Object.keys(g2.s.drops).length, 0);
-  assert.ok(g2.s.stats.earned > 0);
+function levelRewards(g) {
+  let r = 0;
+  for (let lv = 2; lv <= g.s.level; lv++) r += D.levelReward(lv);
+  return r;
+}
+
+test('收銀機：客人吃完自助結帳，不必等掌櫃', () => {
+  const g = mk(7, (s) => s.items.push({ uid: 99, id: 'register', x: 7, y: 7, rot: 0 }));
+  let maxWait = 0;
+  for (let t = 0; t < 120; t += 0.1) {
+    g.update(0.1);
+    for (const c of g.customers) if (c.state === 'wait_pay') maxWait = Math.max(maxWait, c.payWait);
+  }
+  assert.ok(g.s.stats.earned > 0);
+  assert.ok(maxWait <= 1.7, '有收銀機最多等 ' + maxWait.toFixed(2) + ' 秒');
 });
 
 test('沒有員工來點餐時客人會生氣離開，且釋放座位', () => {
@@ -142,12 +150,8 @@ test('任務依序推進', () => {
   let cur = g.currentQuest();
   assert.equal(cur.q.id, 'q1');
   assert.equal(g.claimQuest().ok, false);
-  for (let i = 0; i < 40 && !g.currentQuest().done; i++) {
-    run(g, 5);
-    const k = Object.keys(g.s.drops)[0];
-    if (k) g.collect(...k.split(',').map(Number));
-  }
-  assert.equal(g.currentQuest().done, true);
+  for (let i = 0; i < 80 && !g.currentQuest().done; i++) run(g, 5);
+  assert.equal(g.currentQuest().done, true, '掌櫃結帳 3 次後任務完成');
   assert.equal(g.claimQuest().ok, true);
   assert.equal(g.currentQuest().q.id, 'q2');
 });
@@ -175,7 +179,6 @@ test('經濟平衡：自動玩 20 分鐘（有收款、會買東西）能順利�
     g.update(0.1);
     t += 0.1;
     if (Math.floor(t * 10) % 20 === 0) {
-      for (const k of Object.keys(g.s.drops)) g.collect(...k.split(',').map(Number));
       // 簡單 AI：優先把錢花在座位 → 人手 → 爐灶
       const s = g.s;
       const cur = g.currentQuest();
