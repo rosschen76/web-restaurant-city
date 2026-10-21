@@ -286,6 +286,7 @@
       this.seatTaken.delete(c.seat);
       c.claimedBy = null;
       c.state = 'leave';
+      c.t = 0;
       c.angry = !!angry;
       if (angry) {
         this.s.stats.angry++;
@@ -358,6 +359,7 @@
           if (c.t <= 0) this.finishMeal(c);
           break;
         case 'leave':
+          c.t += dt;
           c.walking = false;
           if (this.follow(c, CUSTOMER_SPEED * 1.15, dt) || c.dead) c.gone = true;
           break;
@@ -396,6 +398,7 @@
       this.emit('served', { vip: c.vip, tip });
       // 離座
       c.state = 'leave';
+      c.t = 0;
       const g = this.grid;
       c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y) || [];
       this.changed();
