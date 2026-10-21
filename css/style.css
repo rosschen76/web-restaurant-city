@@ -126,7 +126,7 @@ img.px { image-rendering: pixelated; image-rendering: crisp-edges; display: inli
 .tabs { display: flex; flex-wrap: wrap; gap: 0; padding: 6px 8px 0; background: var(--paper-2); flex: none; }
 .tab { font: inherit; border: 0; background: var(--paper-3); padding: 5px 10px; margin: 0 3px 0 0; cursor: pointer; font-size: 13px; position: relative; top: 1px; box-shadow: 0 -2px 0 var(--ink), -2px 0 0 var(--ink), 2px 0 0 var(--ink); }
 .tab.on { background: var(--paper); font-weight: bold; padding-bottom: 7px; }
-.win-body { padding: 10px 12px 14px; overflow-y: auto; flex: 1; min-height: 120px; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.win-body { padding: 10px 12px 14px; overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 120px; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 .win-foot { padding: 8px 12px; background: var(--paper-2); flex: none; display: flex; justify-content: flex-end; flex-wrap: wrap; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 12px; padding: 4px; }
@@ -168,7 +168,9 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
 @keyframes toast { 0% { opacity: 0; transform: translateY(-8px); } 8% { opacity: 1; transform: none; } 85% { opacity: 1; } 100% { opacity: 0; } }
 
 .lvup { text-align: center; }
-.lvup h2 { margin: 6px 0; font-size: 26px; color: var(--brand-d); text-shadow: 2px 2px 0 var(--gold); animation: bump 0.5s steps(4) infinite; }
+.lvup h2 { margin: 6px 0; font-size: 26px; color: var(--brand-d); text-shadow: 2px 2px 0 var(--gold); animation: hop 0.5s steps(2) infinite; }
+/* 只做垂直跳動：放大縮放會讓標題超出視窗寬度，在文字放大/窄螢幕時冒出水平捲軸 */
+@keyframes hop { 50% { transform: translateY(-2px); } }
 .lvup .list { text-align: left; margin: 10px auto; display: inline-block; font-size: 14px; line-height: 1.9; }
 
 .welcome p { margin: 6px 0; line-height: 1.6; }
