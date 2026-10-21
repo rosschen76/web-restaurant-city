@@ -72,6 +72,20 @@ await scenario('子路徑載入、歡迎視窗、開始營業', async (page) => 
   assert.ok((await page.title()).includes('像素餐廳城'));
 });
 
+await scenario('餐廳星級最高三星，HUD 以三顆星顯示並隨魅力變化', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const hud = () => page.locator('#stars').innerText();
+  assert.ok((await hud()).includes('尚未評星'), await hud());
+  assert.equal(await page.locator('#stars .star-row').innerText().then((t) => t.length), 3, '永遠只有三顆星的位置');
+  for (const [appeal, word] of [[40, '一星'], [160, '二星'], [400, '三星'], [99999, '三星']]) {
+    await G(page, (a) => { const g = window.__game.game; g.appeal = a; g.stars = window.RC.data.starsForAppeal(a); g.changed(); }, appeal);
+    await page.waitForTimeout(80);
+    const t = await hud();
+    assert.ok(t.includes(word), `魅力 ${appeal} 應顯示「${word}」：${t}`);
+    assert.ok(!/[4-9]\s*星|10\s*星/.test(t));
+  }
+});
+
 await scenario('歡迎視窗可為店掌櫃命名；掌櫃不能被開除', async (page) => {
   await page.fill('#bn0', '王老闆');
   await page.click('[data-act=welcome-ok]');

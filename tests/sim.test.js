@@ -318,3 +318,32 @@ test('任務文字不再提到地毯，裝飾任務只算裝飾', () => {
   g.placeFromInventory('plant_pot', 6, 6, 0);
   assert.equal(g.questProgress({ type: 'decor' }), before + 1);
 });
+
+test('餐廳星級仿米其林：最高三星，0 星代表尚未評星', () => {
+  assert.equal(D.MAX_STARS, 3);
+  assert.equal(D.STAR_TITLES.length, 4);
+  assert.equal(D.starsForAppeal(0), 0);
+  assert.equal(D.starsForAppeal(39), 0);
+  assert.equal(D.starsForAppeal(40), 1);
+  assert.equal(D.starsForAppeal(159), 1);
+  assert.equal(D.starsForAppeal(160), 2);
+  assert.equal(D.starsForAppeal(399), 2);
+  assert.equal(D.starsForAppeal(400), 3);
+  assert.equal(D.starsForAppeal(1e9), 3, '再多魅力也不會超過三星');
+  assert.equal(D.nextStarAppeal(0), 40);
+  assert.equal(D.nextStarAppeal(2), 400);
+  assert.equal(D.nextStarAppeal(3), null);
+  // 起始餐廳尚未評星；任務裡沒有超過三星的目標
+  assert.equal(mk().stars, 0);
+  for (const q of D.quests) if (q.type === 'stars') assert.ok(q.n >= 1 && q.n <= 3, q.text);
+  assert.ok(!D.quests.some((q) => /[4-9]\s*星|10\s*星/.test(q.text)));
+});
+
+test('星級影響售價：每顆星 +10%，0 星不加成也不打折', () => {
+  const g = mk();
+  const base = D.dishes.danbing.price;
+  assert.equal(g.stars, 0);
+  assert.equal(g.dishInfo('danbing').price, base);
+  g.stars = 3;
+  assert.equal(g.dishInfo('danbing').price, Math.round(base * 1.3));
+});

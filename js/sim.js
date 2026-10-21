@@ -194,7 +194,7 @@
       const rec = this.s.dishes[id];
       const cooked = rec ? rec.cooked : 0;
       const m = D.masteryLevel(cooked);
-      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.04 * (this.stars - 1)));
+      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.1 * this.stars));
       return { def: d, mastery: m, cooked, price, learned: !!rec };
     }
 

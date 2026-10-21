@@ -30,7 +30,7 @@ body:
     id: progress
     attributes:
       label: 你目前的進度（選填）
-      placeholder: 例如：Lv.9、4 星、5 位員工、玩了約 2 小時
+      placeholder: 例如：Lv.9、二星、5 位員工、玩了約 2 小時
   - type: textarea
     id: idea
     attributes:

@@ -142,7 +142,9 @@
       this.setText(this.el.lv, String(s.level));
       this.setText(this.el.rname, s.name);
       const stars = this.game.stars;
-      const html = `${ic('star', 1)} ${stars} 星　魅力 ${Math.floor(this.game.appeal)}`;
+      const next = D.nextStarAppeal(stars);
+      const glyphs = Array.from({ length: D.MAX_STARS }, (_, i) => (i < stars ? '★' : '<span class="off">★</span>')).join('');
+      const html = `<span class="star-row" title="${D.STAR_TITLES[stars]}">${glyphs}</span> ${D.STAR_TITLES[stars].split('・')[0]}　魅力 ${Math.floor(this.game.appeal)}${next ? ` / ${next}` : ''}`;
       if (this.el.stars.innerHTML !== html) this.el.stars.innerHTML = html;
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
@@ -525,7 +527,7 @@
         const mins = Math.floor(t.playTime / 60);
         return `<div class="kv">
           <span>餐廳等級</span><b>Lv.${s.level}</b>
-          <span>餐廳星級</span><b>${g.stars} 星</b>
+          <span>餐廳星級（最高三星）</span><b>${D.STAR_TITLES[g.stars]}</b>
           <span>服務客人</span><b>${fmt(t.served)} 位</b>
           <span>氣走的客人</span><b>${fmt(t.angry)} 位</b>
           <span>沒等到位子離開</span><b>${fmt(t.walkouts || 0)} 組</b>

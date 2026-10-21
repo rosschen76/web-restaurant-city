@@ -209,3 +209,7 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
   .hud-tr { flex-wrap: wrap; justify-content: flex-end; width: 150px; row-gap: 2px; }
   .hud-tr .coin-pill { flex: 1 0 100%; }
 }
+
+/* 餐廳星級（最高三星） */
+.star-row { letter-spacing: 1px; }
+.star-row .off { color: #cdb98d; }

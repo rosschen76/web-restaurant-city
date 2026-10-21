@@ -53,7 +53,7 @@
     { id: 'stove_gas', name: '瓦斯爐', cat: 'stove', w: 1, h: 1, price: 150, level: 1, appeal: 0, speed: 1.0, desc: '基本款爐灶。' },
     { id: 'stove_wok', name: '快炒爐', cat: 'stove', w: 1, h: 1, price: 700, level: 4, appeal: 1, speed: 1.25, desc: '大火快炒，烹飪速度 ×1.25。' },
     { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, desc: '蒸氣十足，烹飪速度 ×1.5。' },
-    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '米其林等級，烹飪速度 ×1.85。' },
+    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '專業餐廳等級，烹飪速度 ×1.85。' },
     // 功能
     { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
     { id: 'fridge', name: '冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', desc: '食材取用方便，烹飪時間 -6%（最多 3 台生效）。' },
@@ -110,12 +110,17 @@
   const MAX_LEVEL = 50;
   const xpForLevel = (lv) => Math.round(12 * Math.pow(lv, 1.5) + 8);
   const levelReward = (lv) => 40 * lv;
-  const STAR_STEPS = [0, 15, 40, 80, 140, 230, 360, 560, 850, 1300];
+  // 餐廳星級仿米其林：最高三星。0 星代表尚未評星；數字是達標所需的「魅力」。
+  const STAR_STEPS = [40, 160, 400]; // 一星、二星、三星
+  const MAX_STARS = STAR_STEPS.length;
+  const STAR_TITLES = ['尚未評星', '一星・值得一訪', '二星・值得繞道前往', '三星・值得專程前往'];
   function starsForAppeal(a) {
-    let s = 1;
-    for (let i = 1; i < STAR_STEPS.length; i++) if (a >= STAR_STEPS[i]) s = i + 1;
+    let s = 0;
+    for (let i = 0; i < STAR_STEPS.length; i++) if (a >= STAR_STEPS[i]) s = i + 1;
     return s;
   }
+  /** 下一顆星需要的魅力；已經三星則回傳 null */
+  const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
   const maxStaffForLevel = (lv) => Math.min(8, 1 + (lv >= 2) + (lv >= 4) + (lv >= 6) + (lv >= 9) + (lv >= 12) + (lv >= 15) + (lv >= 18));
   const HIRE_BASE = [0, 200, 600, 1500, 3500, 8000, 16000, 30000];
   const STAFF_XP_STEPS = [0, 12, 30, 60, 100, 160, 240, 340, 460];
@@ -146,20 +151,20 @@
     { id: 'q9', type: 'serve', n: 40, text: '服務 40 位客人', reward: 200 },
     { id: 'q10', type: 'stove', n: 2, text: '擁有 2 座爐灶', reward: 250 },
     { id: 'q11', type: 'expand', n: 1, text: '擴建餐廳', reward: 400 },
-    { id: 'q12', type: 'stars', n: 2, text: '餐廳達到 2 星', reward: 300 },
+    { id: 'q12', type: 'stars', n: 1, text: '餐廳獲得一星評價（值得一訪）', reward: 300 },
     { id: 'q13', type: 'earn', n: 5000, text: '累計賺取 5,000 金幣', reward: 500 },
     { id: 'q14', type: 'learn', n: 5, text: '學會 5 道菜', reward: 600 },
     { id: 'q15', type: 'staff', n: 4, text: '擁有 4 位員工', reward: 800 },
     { id: 'q16', type: 'mastery', n: 60, text: '同一道菜烹飪 60 次（熟練度 4 級）', reward: 1000 },
     { id: 'q17', type: 'level', n: 8, text: '達到 8 級', reward: 1500 },
-    { id: 'q18', type: 'stars', n: 4, text: '餐廳達到 4 星', reward: 2000 },
+    { id: 'q18', type: 'stars', n: 2, text: '餐廳獲得二星評價（值得繞道前往）', reward: 2000 },
     { id: 'q19', type: 'expand', n: 2, text: '再次擴建餐廳', reward: 3000 },
     { id: 'q20', type: 'serve', n: 1000, text: '服務 1,000 位客人', reward: 4000 },
     { id: 'q21', type: 'decor', n: 8, text: '放置 8 件裝飾', reward: 3000 },
     { id: 'q22', type: 'learn', n: 10, text: '學會 10 道菜', reward: 6000 },
-    { id: 'q23', type: 'stars', n: 7, text: '餐廳達到 7 星', reward: 10000 },
+    { id: 'q23', type: 'serve', n: 3000, text: '服務 3,000 位客人', reward: 10000 },
     { id: 'q24', type: 'level', n: 15, text: '達到 15 級', reward: 15000 },
-    { id: 'q25', type: 'stars', n: 10, text: '成為傳說中的 10 星餐廳', reward: 50000 },
+    { id: 'q25', type: 'stars', n: 3, text: '成為三星餐廳（值得專程前往）', reward: 50000 },
   ];
 
   /* ───────── 群體客人 / 候位 / 離線收益 ───────── */
@@ -188,7 +193,7 @@
     floorList, floors, wallList, walls,
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,
-    STAR_STEPS, starsForAppeal,
+    STAR_STEPS, MAX_STARS, STAR_TITLES, starsForAppeal, nextStarAppeal,
     maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
