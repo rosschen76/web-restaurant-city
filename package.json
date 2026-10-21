@@ -1,0 +1,13 @@
+{
+  "name": "pixel-restaurant-city",
+  "version": "1.0.0",
+  "description": "像素風網頁餐廳經營遊戲（純靜態，可直接部署到 GitHub Pages）",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "test": "node --test tests/*.test.js",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "engines": { "node": ">=18" }
+}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#2b3a4a">
+  <meta name="description" content="像素風的餐廳經營遊戲：擺設家具、雇用員工、學習菜色，把小吃店經營成傳說中的名店。">
+  <title>像素餐廳城</title>
+  <link rel="icon" id="favicon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game" aria-label="餐廳畫面"></canvas>
+  <div id="hud"></div>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="modal-root"></div>
+  <noscript><p style="color:#fff;padding:24px">這個遊戲需要啟用 JavaScript。</p></noscript>
+
+  <!-- 純靜態、不需要建置；依序載入即可（GitHub Pages 直接可用） -->
+  <script src="js/util.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/gfx.js"></script>
+  <script src="js/art_world.js"></script>
+  <script src="js/art_people.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
