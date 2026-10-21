@@ -16,7 +16,11 @@
   const SERVE_TIME = 0.5;
   const REST_BELOW = 15;
   const REST_UNTIL = 60;
-  const CLEAN_TIME = 1.5; // 收拾一張桌子的時間（秒）
+  const CLEAN_TIME = 1.2; // 收拾一張桌子的時間（秒）
+  const PAY_TIME = 0.8; // 店掌櫃電子支付收款的時間（秒）
+  const PAY_TIP_WINDOW = 30; // 結帳等越久小費越少，等滿這麼久就沒有小費（秒）
+  const PAY_TIMEOUT = 45; // 久等沒人來收就自助結帳（沒有小費），免得座位被卡死（秒）
+  const REGISTER_DELAY = 1.5; // 有收銀機時，客人自助結帳前的等待（秒）
 
   class Game {
     constructor(state, opts) {
@@ -37,7 +41,6 @@
       this.nextPid = 1;
       this.lastPartySize = 1;
       this.quiet = false; // 離線快轉時不發事件
-      this.errands = []; // 等著店掌櫃去收的金幣 {key,tx,ty,access}
       this.dirty = new Map(); // table uid -> {x,y,claimedBy} 客人離席後桌上的餐具
       this.spawnTimer = 3;
       this.autosaveTimer = 0;
@@ -118,29 +121,19 @@
     /** 版面變動後：把被家具壓到的人移開、重算路徑、取消失效的工作。 */
     afterLayoutChange() {
       const g = this.grid;
-      // 店內掉落的金幣若桌子不見了就直接入帳
-      for (const key of Object.keys(this.s.drops)) {
-        const [x, y] = key.split(',').map(Number);
-        const o = W.itemAt(g, x, y);
-        if (!o || D.furniture[o.id].cat !== 'table') {
-          const amt = this.s.drops[key];
-          delete this.s.drops[key];
-          this.addCoins(amt, x + 0.5, y + 0.5, true);
-        }
-      }
       for (const c of this.customers.slice()) {
         if (c.state === 'leave') continue;
         if (c.state === 'leave') continue;
         const seat = this.seatByChair.get(c.seat);
         if (!seat) {
-          this.sendParty(c.party, false);
+          this.sendParty(c.party, false, true);
           continue;
         }
         if (c.state === 'arrive') continue;
         if (c.state === 'enter') {
           const p = W.findPath(g, Math.floor(c.x), Math.floor(c.y), seat.x, seat.y);
           if (p) c.path = p;
-          else this.sendParty(c.party, false);
+          else this.sendParty(c.party, false, true);
         } else {
           c.x = seat.x + 0.5;
           c.y = seat.y + 0.5;
@@ -261,9 +254,10 @@
         if (d && d.claimedBy === m.id) d.claimedBy = null;
         m.cleanUid = null;
       }
-      if (m.errand) {
-        this.errands.unshift(m.errand); // 被打斷的收款不要丟掉
-        m.errand = null;
+      if (m.pay) {
+        const pc = this.customerById(m.pay.cid);
+        if (pc && pc.payBy === m.id) pc.payBy = null; // 客人還在等，會再派人來
+        m.pay = null;
       }
       m.job = null;
       m.stove = null;
@@ -370,6 +364,9 @@
           dish: null,
           p: 1,
           claimedBy: null,
+          payBy: null, // 正在替他結帳的店掌櫃
+          payWait: 0,
+          rush: false, // 玩家點過，掌櫃優先處理
           mood: 'ok',
           fade: 0,
           eatTotal: 1,
@@ -391,6 +388,11 @@
         const m = this.crewById(c.claimedBy);
         if (m) this.abortJob(m);
       }
+      if (c.payBy != null) {
+        const boss = this.crewById(c.payBy);
+        if (boss) this.abortJob(boss);
+        c.payBy = null;
+      }
       this.seatTaken.delete(c.seat);
       c.claimedBy = null;
       c.state = 'leave';
@@ -404,26 +406,24 @@
     }
 
     /**
-     * 整組一起離開。angry=true 代表有人等太久而生氣：還沒吃完的人氣走（記一次差評），
-     * 已經吃完付過錢的人照常開心離席。
+     * 整組離開（有人等太久氣走，或版面變動讓座位消失）。
+     * 已經吃完、正在等結帳的人不受氣走影響，結完帳自己會走；版面變動（forced）則直接結清離開，不讓錢憑空消失。
+     * 有人氣走時整組只記一次差評。
      */
-    sendParty(partyId, angry) {
+    sendParty(partyId, angry, forced) {
       let at = null;
       for (const m of this.customers) {
         if (m.party !== partyId || m.state === 'leave') continue;
+        const paying = m.state === 'wait_pay';
+        if (paying && !forced) continue;
         at = at || m;
-        this.startLeave(m, m.state === 'wait_party' ? false : angry);
+        if (paying) this.settle(m, { noTip: true });
+        else this.startLeave(m, angry);
       }
       if (angry && at) {
         this.s.stats.angry++;
         this.emit('angry', { x: at.x, y: at.y });
       }
-    }
-
-    /** 同組都吃完了才一起離席。 */
-    checkPartyDone(partyId) {
-      const ms = this.customers.filter((m) => m.party === partyId && m.state !== 'leave');
-      if (ms.length && ms.every((m) => m.state === 'wait_party')) for (const m of ms) this.startLeave(m, false);
     }
 
     /** 沿路徑前進；回傳 true 表示已走完。 */
@@ -499,6 +499,13 @@
           c.t -= dt;
           if (c.t <= 0) this.finishMeal(c);
           break;
+        case 'wait_pay':
+          c.payWait += dt;
+          if (c.payBy == null) {
+            if (this.hasRegister && c.payWait >= REGISTER_DELAY) this.settle(c, {}); // 收銀機：客人自助結帳
+            else if (c.payWait >= PAY_TIMEOUT) this.settle(c, { noTip: true }); // 太久沒人收，自助結帳
+          }
+          break;
         case 'leave':
           c.t += dt;
           c.walking = false;
@@ -512,60 +519,80 @@
       }
     }
 
+    /** 吃完了：先坐著、頭上出現金幣符號，等店掌櫃來結帳；結完帳才會起身、座位才釋放。 */
     finishMeal(c) {
-      const s = this.s;
       const info = this.dishInfo(c.dish);
       const mult = c.vip ? 3 : 1;
       const speedBonus = clamp((c.servedP - 0.5) * 2, 0, 1); // 上菜越快小費越多
-      const tip = Math.round(info.price * 0.5 * speedBonus * mult);
-      const total = info.price * mult + tip;
-      s.stats.served++;
-      s.stats.tips += tip;
+      c.bill = info.price * mult;
+      c.tipBase = Math.round(info.price * 0.5 * speedBonus * mult);
+      this.s.stats.served++;
       this.addXp(info.def.xp * mult);
-      const seat = this.seatByChair.get(c.seat);
-      c.mood = 'happy';
+      c.state = 'wait_pay';
+      c.t = 0;
+      c.payWait = 0;
+      c.payBy = null;
+      this.emit('served', { vip: c.vip, tip: c.tipBase });
+      this.changed();
+    }
+
+    /** 收款完成：金幣入帳，客人起身離開（座位在這時才釋放）。 */
+    settle(c, o) {
+      o = o || {};
+      const s = this.s;
+      const fresh = o.noTip ? 0 : clamp(1 - c.payWait / PAY_TIP_WINDOW, 0, 1); // 等越久小費越少
+      const tip = Math.round(c.tipBase * fresh);
+      const total = c.bill + tip;
+      s.stats.tips += tip;
+      s.stats.collects++;
       c.paid = total;
-      if (seat) {
-        if (this.hasRegister) {
-          this.addCoins(total, seat.tx + 0.5, seat.ty + 0.5);
-          this.emit('collect', { auto: true });
-        } else {
-          const key = seat.tx + ',' + seat.ty;
-          s.drops[key] = (s.drops[key] || 0) + total;
-          this.emit('drop', { x: seat.tx + 0.5, y: seat.ty + 0.5, amount: total });
+      c.mood = 'happy';
+      const boss = c.payBy != null ? this.crewById(c.payBy) : null;
+      if (boss) {
+        boss.pay = null;
+        if (boss.state === 'to_pay' || boss.state === 'paying') {
+          boss.state = 'idle';
+          boss.path = [];
+          boss.idleT = 0.2;
         }
       }
-      this.emit('served', { vip: c.vip, tip });
-      // 吃完先坐著等同伴，全組吃完才一起離席
-      c.state = 'wait_party';
-      c.t = 0;
-      this.checkPartyDone(c.party);
+      c.payBy = null;
+      this.addCoins(total, c.x, c.y);
+      this.emit('collect', { auto: !boss });
+      this.startLeave(c, false);
       this.changed();
+    }
+
+    /** 玩家點了等結帳的客人：店掌櫃優先去收他的錢。 */
+    rushPay(cid) {
+      const c = this.customerById(cid);
+      if (!c || c.state !== 'wait_pay') return this.fail('這位客人還沒吃完');
+      c.rush = true;
+      return { ok: true };
     }
 
     /* ───────── 員工行為 ───────── */
 
-    /** 店掌櫃手上的差事：收金幣（可以插隊）。 */
+    /**
+     * 店掌櫃的本業：替吃完的客人結帳（電子支付）。只有他能收款，而且優先於其他工作。
+     * 煮到一半或正在上菜時不打斷，免得浪費餐點。玩家點過的客人優先，其次是等最久的。
+     */
     dispatchBoss() {
       const boss = this.crew.find((m) => m.boss);
-      if (!boss) return;
-      while (this.errands.length) {
-        const e = this.errands[0];
-        if (!this.s.drops[e.key]) {
-          this.errands.shift();
-          continue;
-        }
-        // 煮到一半或正在上菜時不打斷，免得浪費餐點
-        if (!['idle', 'to_customer', 'taking', 'wait_stove', 'to_stove', 'to_clean'].includes(boss.state)) return;
-        const r = W.nearestReachable(this.grid, Math.floor(boss.x), Math.floor(boss.y), e.access);
-        this.errands.shift();
-        if (!r) {
-          this.toast('掌櫃走不到那張桌子', 'bad');
-          continue;
-        }
+      if (!boss || this.hasRegister) return; // 有收銀機：客人自助結帳，掌櫃不用跑腿
+      if (!['idle', 'to_customer', 'taking', 'wait_stove', 'to_stove', 'to_clean'].includes(boss.state)) return;
+      const waiting = this.customers.filter((c) => c.state === 'wait_pay' && c.payBy == null);
+      if (!waiting.length) return;
+      waiting.sort((a, b) => (b.rush ? 1 : 0) - (a.rush ? 1 : 0) || b.payWait - a.payWait);
+      for (const c of waiting) {
+        const seat = this.seatByChair.get(c.seat);
+        if (!seat) continue;
+        const r = W.nearestReachable(this.grid, Math.floor(boss.x), Math.floor(boss.y), seat.access);
+        if (!r) continue;
         this.abortJob(boss);
-        boss.errand = e;
-        boss.state = 'to_coin';
+        boss.pay = { cid: c.id };
+        c.payBy = boss.id;
+        boss.state = 'to_pay';
         boss.path = r.path;
         return;
       }
@@ -666,23 +693,30 @@
           }
           break;
         }
-        case 'to_coin':
-          if (this.follow(m, spd, dt)) {
-            m.state = 'collecting';
-            m.t = 0.35;
-            m.dir = this.dirToward(m, m.errand.tx + 0.5, m.errand.ty + 0.5);
+        case 'to_pay':
+        case 'paying': {
+          const pc = m.pay && this.customerById(m.pay.cid);
+          if (!pc || pc.state !== 'wait_pay' || pc.payBy !== m.id) {
+            this.abortJob(m);
+            break;
+          }
+          if (m.state === 'to_pay') {
+            if (this.follow(m, spd, dt)) {
+              m.state = 'paying';
+              m.payTotal = m.t = PAY_TIME / rec.speed;
+              this.faceTo(m, pc);
+            }
+          } else {
+            m.t -= dt;
+            if (m.t <= 0) {
+              this.settle(pc, {});
+              m.pay = null;
+              m.state = 'idle';
+              m.idleT = 0.2;
+            }
           }
           break;
-        case 'collecting':
-          m.t -= dt;
-          if (m.t <= 0) {
-            const e = m.errand;
-            m.errand = null;
-            if (e && this.s.drops[e.key]) this.collect(e.tx, e.ty);
-            m.state = 'idle';
-            m.idleT = 0.2;
-          }
-          break;
+        }
         case 'to_clean': {
           const t = this.tables.get(m.cleanUid);
           if (!t || !this.dirty.has(m.cleanUid)) {
@@ -877,12 +911,11 @@
      */
     catchUp(awaySeconds) {
       const O = D.OFFLINE;
-      if (!isFinite(awaySeconds) || awaySeconds < O.minAway) return null;
+      if (this.paused || !isFinite(awaySeconds) || awaySeconds < O.minAway) return null; // 裝潢暫停中時間不流動
       const s = this.s;
       const real = Math.min(awaySeconds, O.maxHours * 3600);
       const simulated = real * O.efficiency;
-      const pile = () => Object.values(s.drops).reduce((a, b) => a + b, 0);
-      const before = { served: s.stats.served, earned: s.stats.earned, level: s.level, pile: pile(), walkouts: s.stats.walkouts, angry: s.stats.angry };
+      const before = { served: s.stats.served, earned: s.stats.earned, level: s.level, walkouts: s.stats.walkouts, angry: s.stats.angry };
       this.quiet = true;
       let left = simulated;
       while (left > 1e-6) {
@@ -901,13 +934,11 @@
         simulated,
         served: s.stats.served - before.served,
         earned: s.stats.earned - before.earned,
-        pending: Math.max(0, pile() - before.pile),
         levelFrom: before.level,
         levelTo: s.level,
         levelReward: reward,
         walkouts: s.stats.walkouts - before.walkouts,
         angry: s.stats.angry - before.angry,
-        hasRegister: this.hasRegister,
       };
     }
 
@@ -1105,38 +1136,6 @@
       const boss = this.s.staff.find((m) => m.boss);
       if (!boss) return this.fail('找不到店掌櫃');
       boss.name = name;
-      return this.done();
-    }
-
-    coinClaimed(key) {
-      return this.errands.some((e) => e.key === key) || this.crew.some((m) => m.errand && m.errand.key === key);
-    }
-
-    /** 玩家點了桌上的金幣：桌上的錢只有店掌櫃能收，他會走過去。 */
-    requestCollect(tx, ty) {
-      const key = tx + ',' + ty;
-      if (!this.s.drops[key]) return this.fail('沒有金幣');
-      if (this.coinClaimed(key)) return { ok: true, queued: true };
-      const access = [];
-      for (let d = 0; d < 4; d++) {
-        const nx = tx + DX[d];
-        const ny = ty + DY[d];
-        if (W.walkable(this.grid, nx, ny) && this.grid.reach[ny * this.grid.w + nx]) access.push({ x: nx, y: ny });
-      }
-      if (!access.length) return this.fail('掌櫃走不到那張桌子');
-      this.errands.push({ key, tx, ty, access });
-      return { ok: true };
-    }
-
-    /** 立刻入帳（店掌櫃走到桌邊後呼叫；測試與離線結算也用得到） */
-    collect(tx, ty) {
-      const key = tx + ',' + ty;
-      const amt = this.s.drops[key];
-      if (!amt) return this.fail('沒有金幣');
-      delete this.s.drops[key];
-      this.s.stats.collects++;
-      this.addCoins(amt, tx + 0.5, ty + 0.5);
-      this.emit('collect', { auto: false });
       return this.done();
     }
 

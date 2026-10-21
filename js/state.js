@@ -71,7 +71,6 @@
       staff: [newStaff(1, first)],
       nextStaffId: 2,
       candidates: [],
-      drops: {},
       quest: { i: 0 },
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       settings: { sound: true, music: true, speed: 1 },
@@ -183,8 +182,8 @@
         .map((c) => ({ name: c.name.slice(0, 8), look: c.look, speed: num(c.speed, 1, 0.5, 2), skill: num(c.skill, 1, 0.5, 2) }));
       if (cs.length === 3) s.candidates = cs;
     }
-    s.drops = {};
-    for (const [k, v] of Object.entries(raw.drops || {})) if (/^\d+,\d+$/.test(k) && v > 0) s.drops[k] = Math.floor(num(v, 0, 0, 1e9));
+    // 舊版把金幣留在桌上等玩家點擊；現在改為客人頭上結帳，舊存檔桌上未收的錢直接併入金幣
+    for (const v of Object.values(raw.drops || {})) if (v > 0) s.coins += Math.floor(num(v, 0, 0, 1e9));
     s.quest = { i: Math.floor(num(raw.quest && raw.quest.i, 0, 0, D.quests.length)) };
     const rs = raw.stats || {};
     s.stats = {

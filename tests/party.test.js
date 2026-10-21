@@ -110,22 +110,28 @@ test('桌子變小（移走椅子）後，坐不下的候位組直接離開', ()
   assert.equal(g.queue.length, 0);
 });
 
-test('同組一起離席：只要有人離開，全組都在同一刻離開', () => {
+test('每位客人各自結帳離開；整組都走了桌子才釋出，並留下餐具', () => {
   const g = mk(TWO_TABLES, 4);
-  g.s.coins = 1e6;
-  let checked = 0;
+  let sawDirty = false;
+  let sawPartiallyLeft = false;
   for (let t = 0; t < 900; t += 0.1) {
     g.update(0.1);
-    const byParty = new Map();
-    for (const c of g.customers) (byParty.get(c.party) || byParty.set(c.party, []).get(c.party)).push(c.state);
-    for (const states of byParty.values()) {
-      if (states.includes('leave')) {
-        assert.ok(states.every((x) => x === 'leave'), '同組狀態 ' + states.join(','));
-        checked++;
-      }
+    for (const p of g.parties) {
+      const members = g.customers.filter((c) => c.party === p.id);
+      const leaving = members.filter((c) => c.state === 'leave').length;
+      // 桌子在整組離席前一直被這組占用
+      if (leaving < members.length) assert.equal(g.tableParty.get(p.tableUid), p.id, '還有人沒走，桌子不能釋出');
+      // 同組有人已經結帳離開、其他人還在：代表各自結帳，而不是一起離席
+      if (p.size > 1 && leaving > 0 && leaving < members.length) sawPartiallyLeft = true;
+    }
+    for (const uid of g.dirty.keys()) {
+      sawDirty = true;
+      assert.ok(!g.tableParty.has(uid), '桌子髒了就已經不屬於任何一組');
     }
   }
-  assert.ok(checked > 0 && g.s.stats.served > 10, '應該有團體完成用餐 ' + g.s.stats.served);
+  assert.ok(g.s.stats.served > 10, '服務人數 ' + g.s.stats.served);
+  assert.ok(sawDirty, '應該出現過待收拾的桌子');
+  assert.ok(sawPartiallyLeft, '多人組應該出現過有人先結帳離開、同伴還在座位上');
 });
 
 test('有人等太久：整組一起氣走，只記一次差評，已付錢的同伴照常開心離席', () => {
@@ -183,7 +189,7 @@ test('離線收益：真實模擬快轉、依效率折算', () => {
   assert.equal(r.show, true);
   assert.equal(r.capped, false);
   assert.ok(r.served > 20, '離線期間應服務不少客人：' + r.served);
-  assert.ok(r.earned + r.pending > 0);
+  assert.ok(r.earned > 0);
   assert.equal(levelEvents, 0, '快轉期間不發事件');
   assert.equal(g.quiet, false);
   assert.ok(r.levelTo >= r.levelFrom);

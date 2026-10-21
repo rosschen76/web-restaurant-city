@@ -8,7 +8,7 @@
   const AP = RC.artPeople;
   const { canvas, ctx } = gfx;
 
-  const SEATED = ['browse', 'wait_order', 'ordering', 'wait_food', 'eat', 'wait_party'];
+  const SEATED = ['browse', 'wait_order', 'ordering', 'wait_food', 'eat', 'wait_pay'];
   const TOP_UI = 64; // css px，HUD 保留空間
   const BOTTOM_UI = 92;
 
@@ -279,10 +279,6 @@
         list.push({ k: seat.tx + seat.ty + 1.1, f: () => this.drawPlate(g, seat, c) });
       }
       for (const d of game.dirty.values()) list.push({ k: d.x + d.y + 1.15, f: () => this.drawPlates(g, d) });
-      for (const [key, amt] of Object.entries(s.drops)) {
-        const [tx, ty] = key.split(',').map(Number);
-        list.push({ k: tx + ty + 1.2, f: () => this.drawDrop(g, tx, ty, amt) });
-      }
 
       list.sort((a, b) => a.k - b.k);
       for (const r of list) r.f();
@@ -315,19 +311,6 @@
       g.drawImage(AP.fx('plates'), Math.round(p[0] - 4), Math.round(p[1] - z - 7));
     }
 
-    drawDrop(g, tx, ty, amt) {
-      const p = this.proj(tx + 0.5, ty + 0.5);
-      const z = this.tableTopY(tx, ty);
-      const bob = Math.round(Math.sin(this.time * 5 + tx * 3 + ty) * 1.5);
-      const n = amt < 40 ? 1 : amt < 150 ? 2 : 3;
-      const spr = AP.fx('coin');
-      const claimed = this.game.coinClaimed(tx + ',' + ty);
-      if (claimed) g.globalAlpha = 0.55; // 掌櫃已經在路上了
-      for (let i = 0; i < n; i++) g.drawImage(spr, Math.round(p[0] - 4 + (i - (n - 1) / 2) * 5), Math.round(p[1] - z - 9 - i * 2 + (i === n - 1 ? bob : 0)));
-      g.globalAlpha = 1;
-      if (!claimed && ((this.time * 3) | 0) % 3 === 0) g.drawImage(AP.fx('spark'), Math.round(p[0] + 3), Math.round(p[1] - z - 16 + bob));
-    }
-
     drawCustomer(g, c) {
       const seated = SEATED.includes(c.state);
       const p = this.proj(c.x, c.y);
@@ -350,7 +333,7 @@
       const p = this.proj(m.x, m.y);
       const o = { dir: m.dir, staff: true, boss: m.boss, moving: m.walking && m.state !== 'rest', walk: ((this.time * 8 + m.id) | 0) & 1 };
       if (this.selectedActor && this.selectedActor.kind === 'staff' && this.selectedActor.id === m.id) this.ring(g, p[0], p[1] + 4);
-      const jig = m.state === 'cooking' || m.state === 'cleaning' || m.state === 'collecting' ? ((this.time * 6) | 0) & 1 : 0;
+      const jig = m.state === 'cooking' || m.state === 'cleaning' || m.state === 'paying' ? ((this.time * 6) | 0) & 1 : 0;
       AP.drawPerson(g, p[0], p[1] + 3 - jig, m.rec.look, o);
       m._sx = p[0];
       m._sy = p[1] + 3;
@@ -381,9 +364,13 @@
           const b = AP.bubble(g, c._sx, top + bob, 18, 18, c.p < 0.3 ? '#ffd0c8' : '#fffaf0');
           g.drawImage(AP.dish(c.dish), b.x + 2, b.y + 2);
           this.patience(g, c, top + bob + 2);
-        } else if (c.state === 'wait_party') {
-          const b = AP.bubble(g, c._sx, top + bob, 13, 12, '#fffaf0');
-          g.drawImage(AP.fx('heart'), b.x + 2, b.y + 2);
+        } else if (c.state === 'wait_pay') {
+          // 吃完了：頭上出現金幣，等店掌櫃來結帳；掌櫃已經在路上時泡泡不再跳動
+          const hop = c.payBy == null ? Math.round(Math.sin(t * 7 + c.id) * 1.5) : 0;
+          const b = AP.bubble(g, c._sx, top + hop, 16, 16, c.rush ? '#ffe9a0' : '#fff3b0');
+          g.drawImage(AP.fx('coin'), b.x + 3, b.y + 3);
+          // 小費條：等越久越少
+          this.bar(g, c._sx, top + hop - 20, Math.max(0, 1 - c.payWait / 30), '#f2c94c');
         } else if (c.state === 'leave' && c.t < 1.6) {
           if (c.angry) {
             const b = AP.bubble(g, c._sx, top + bob, 13, 12, '#ffd0c8');
@@ -400,6 +387,7 @@
         const top = m._sy - 33;
         if (m.state === 'cooking') this.bar(g, m._sx, top, m.cookTotal ? 1 - m.t / m.cookTotal : 0, '#ff9a3a');
         else if (m.state === 'cleaning') this.bar(g, m._sx, top, m.cleanTotal ? 1 - m.t / m.cleanTotal : 0, '#6fc3e0');
+        else if (m.state === 'paying') this.bar(g, m._sx, top, m.payTotal ? 1 - m.t / m.payTotal : 0, '#ffd84a');
         else if (m.state === 'rest') {
           const b = AP.bubble(g, m._sx, top, 15, 12, '#fffaf0');
           g.drawImage(AP.fx('zzz'), b.x + 2, b.y + 2 + (((t * 2) | 0) & 1));
@@ -544,22 +532,10 @@
 
     /* ───────── 點擊判定 ───────── */
 
-    /** 回傳最上層被點到的東西：{type:'drop'|'staff'|'customer'|'item', ...} 或 null */
+    /** 回傳最上層被點到的東西：{type:'staff'|'customer'|'item', ...} 或 null */
     pick(cssX, cssY) {
       const [lx, ly] = this.cssToLogical(cssX, cssY);
       const game = this.game;
-      // 金幣
-      let best = null;
-      for (const key of Object.keys(game.s.drops)) {
-        const [tx, ty] = key.split(',').map(Number);
-        const p = this.proj(tx + 0.5, ty + 0.5);
-        const z = this.tableTopY(tx, ty);
-        const dx = lx - p[0];
-        const dy = ly - (p[1] - z - 12);
-        const d = dx * dx + dy * dy;
-        if (d < 14 * 14 && (!best || d < best.d)) best = { type: 'drop', tx, ty, d };
-      }
-      if (best && !this.edit) return best;
       if (this.edit) {
         const it = this.pickItem(lx, ly);
         if (it) return { type: 'item', item: it };
@@ -572,7 +548,7 @@
         if (h && (!top || h.depth > top.depth)) top = { type: 'staff', id: m.id, depth: h.depth };
       }
       for (const c of game.customers) {
-        const h = hit(c, 7, 28, c.x + c.y);
+        const h = hit(c, 7, c.state === 'wait_pay' ? 48 : 28, c.x + c.y); // 等結帳時，頭上的金幣泡泡也可以點
         if (h && (!top || h.depth > top.depth)) top = { type: 'customer', id: c.id, depth: h.depth };
       }
       return top;

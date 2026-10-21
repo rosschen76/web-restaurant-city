@@ -113,17 +113,79 @@ await scenario('離線收益：離開 2 小時後重新開啟會看到歡迎回�
   throw Object.assign(new Error('__done__'), { done: true });
 });
 
-await scenario('客人上門並留下金幣，點擊收款入帳、任務推進', async (page) => {
+await scenario('客人吃完頭上出現金幣，掌櫃走過去結帳，付完客人才離開、座位才釋放', async (page) => {
   await page.click('[data-act=welcome-ok]');
-  await G(page, () => { const g = window.__game.game; for (let i = 0; i < 700 && !Object.keys(g.s.drops).length; i++) g.update(0.1); });
-  const before = await G(page, () => window.__game.game.s.coins);
-  const pos = await G(page, () => { const { game, view } = window.__game; const [k] = Object.keys(game.s.drops); const [x, y] = k.split(',').map(Number); return view.tileToCss(x + 0.5, y + 0.5, 20); });
+  // 推進到有客人吃完、等結帳
+  const info = await G(page, () => {
+    const g = window.__game.game;
+    for (let i = 0; i < 3000 && !g.customers.some((c) => c.state === 'wait_pay'); i++) g.update(0.1);
+    const c = g.customers.find((x) => x.state === 'wait_pay');
+    return c ? { id: c.id, seatTaken: g.seatTaken.get(c.seat) === c.id, coins: g.s.coins } : null;
+  });
+  assert.ok(info, '應該有客人吃完等結帳');
+  assert.equal(info.seatTaken, true, '結帳前座位仍被占用');
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: 'test-results/pay-bubble.png' }).catch(() => {});
+  const done = await G(page, (id) => {
+    const g = window.__game.game;
+    const c = g.customerById(id);
+    const seat = c.seat;
+    const coins = g.s.coins;
+    for (let i = 0; i < 400 && c.state === 'wait_pay'; i++) g.update(0.1);
+    return { state: c.state, paid: c.paid, gained: g.s.coins - coins, seatReleased: !g.seatTaken.has(seat), collects: g.s.stats.collects };
+  }, info.id);
+  assert.equal(done.state, 'leave');
+  assert.ok(done.paid > 0 && done.gained >= done.paid, '付款後金幣入帳');
+  assert.equal(done.seatReleased, true, '離開時座位釋放');
+  assert.ok(done.collects >= 1);
+});
+
+await scenario('點擊頭上有金幣的客人：請掌櫃優先結帳', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const pos = await G(page, () => {
+    const { game: g, view } = window.__game;
+    g.s.coins = 9999; g.s.level = 3; g.hire(0); // 有員工煮菜；掌櫃一直在忙，客人才會留在座位上等結帳
+    const busy = () => { g.crew[0].state = 'cooking'; g.crew[0].t = 99; };
+    busy();
+    for (let i = 0; i < 4000 && !g.customers.some((c) => c.state === 'wait_pay'); i++) { busy(); g.update(0.1); }
+    view.render(0.016);
+    const c = g.customers.find((x) => x.state === 'wait_pay');
+    const p = view.tileToCss(c.x, c.y, 40);
+    return { x: p.x, y: p.y, id: c.id };
+  });
   await page.mouse.click(pos.x, pos.y);
-  assert.equal(await G(page, () => window.__game.game.s.coins), before, '點下去不會立刻入帳，要等掌櫃走過去');
-  assert.equal(await G(page, () => window.__game.game.errands.length + window.__game.game.crew.filter((m) => m.errand).length), 1, '掌櫃接下收款差事');
-  await G(page, () => { const g = window.__game.game; for (let i = 0; i < 300 && g.s.stats.collects < 1; i++) g.update(0.1); });
-  assert.ok((await G(page, () => window.__game.game.s.coins)) > before, '掌櫃收完後金幣增加');
-  assert.equal(await G(page, () => window.__game.game.s.stats.collects), 1);
+  assert.equal(await G(page, (id) => window.__game.game.customerById(id).rush, pos.id), true, '點客人會請掌櫃優先');
+  assert.ok(await page.locator('#actor').isVisible(), '同時顯示客人資訊卡');
+});
+
+await scenario('進入裝潢模式時遊戲時間暫停，離開後恢復', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#pause').isVisible(), false);
+  const snap = () => G(page, () => { const g = window.__game.game; return JSON.stringify([g.s.stats.playTime, g.customers.map((c) => [c.x, c.y, c.state, c.p]), g.crew.map((m) => [m.x, m.y, m.state, m.t]), g.spawnTimer]); });
+  await page.click('.bottom-bar [data-act=toggle-edit]');
+  assert.equal(await G(page, () => window.__game.game.paused), true);
+  assert.equal(await page.locator('#pause').isVisible(), true, '要提示時間已暫停');
+  const a = await snap();
+  await page.waitForTimeout(1500);
+  assert.equal(await snap(), a, '暫停期間（真實過了 1.5 秒）遊戲內任何東西都沒動');
+  // 暫停中拖曳擺放照常運作
+  await page.click('#editbar [data-act=toggle-edit]');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+  assert.equal(await page.locator('#pause').isVisible(), false);
+  await page.waitForTimeout(800);
+  assert.notEqual(await snap(), a, '離開裝潢模式後時間繼續');
+});
+
+await scenario('從商店購買後自動進入擺放（也會暫停時間）', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { window.__game.game.s.coins = 999; });
+  await page.click('.bottom-bar [data-act=open-shop]');
+  await page.click('[data-act=buy-furn][data-id=table_wood]');
+  assert.equal(await G(page, () => window.__game.game.paused), true);
+  await page.keyboard.press('Escape'); // 取消擺放
+  await page.keyboard.press('Escape'); // 離開裝潢模式
+  assert.equal(await G(page, () => window.__game.game.paused), false);
 });
 
 await scenario('商店購買 → 放置預覽 → 點擊擺放', async (page) => {
@@ -180,7 +242,6 @@ await scenario('以 3 倍速連續模擬 20 分鐘不出錯，等級成長', asy
     const { game } = window.__game;
     for (let i = 0; i < 12000; i++) {
       game.update(0.1);
-      if (i % 20 === 0) for (const k of Object.keys(game.s.drops)) game.collect(...k.split(',').map(Number));
       if (i % 100 === 0) { game.claimQuest(); game.buyFurniture('chair_wood'); }
     }
   });

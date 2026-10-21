@@ -195,3 +195,6 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; }
 }
+
+/* 裝潢模式：提醒玩家時間已暫停 */
+.pause-badge { background: #cfe8ff; }

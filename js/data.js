@@ -55,7 +55,7 @@
     { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, desc: '蒸氣十足，烹飪速度 ×1.5。' },
     { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '米其林等級，烹飪速度 ×1.85。' },
     // 功能
-    { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人用完餐後，金幣自動入帳！' },
+    { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
     { id: 'fridge', name: '冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', desc: '食材取用方便，烹飪時間 -6%（最多 3 台生效）。' },
     // 裝飾
     { id: 'plant_pot', name: '小盆栽', cat: 'decor', w: 1, h: 1, price: 70, level: 1, appeal: 2, desc: '一抹綠意。' },
@@ -138,7 +138,7 @@
   /* ───────── 任務 ───────── */
   // type 對應 sim.questProgress；n 為目標值
   const quests = [
-    { id: 'q1', type: 'collect', n: 3, text: '點擊餐桌上的金幣收款', reward: 30 },
+    { id: 'q1', type: 'collect', n: 3, text: '讓店掌櫃替客人結帳 3 次（客人吃完頭上會出現金幣）', reward: 30 },
     { id: 'q2', type: 'chair', n: 6, text: '擁有 6 張椅子（商店購買後放進餐廳）', reward: 40 },
     { id: 'q3', type: 'serve', n: 8, text: '服務 8 位客人', reward: 60 },
     { id: 'q4', type: 'learn', n: 2, text: '學會 2 道菜（到「菜單」學習豆漿）', reward: 80 },
