@@ -116,6 +116,11 @@
     // 物件：已知 id、座標在範圍內、不重疊
     s.items = [];
     s.nextUid = 1;
+    // 已取消的商品（地毯）：擺放中與倉庫裡的都按原價退款
+    let refund = 0;
+    for (const it of Array.isArray(raw.items) ? raw.items : []) if (it && D.LEGACY_REFUND[it.id]) refund += D.LEGACY_REFUND[it.id];
+    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.LEGACY_REFUND[id] && n > 0) refund += D.LEGACY_REFUND[id] * Math.floor(num(n, 0, 0, 9999));
+    s.coins += refund;
     const exp = D.expansions[st];
     const taken = new Set();
     for (const it of Array.isArray(raw.items) ? raw.items : []) {

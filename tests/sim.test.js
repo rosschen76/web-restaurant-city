@@ -282,3 +282,39 @@ test('讀檔：舊版明文存檔相容；被改過的存檔備份後重新開�
   assert.equal(RC.state.load(storage), null);
   assert.equal(RC.state.loadStatus, 'none');
 });
+
+test('地毯已取消：商品、分類、特殊「可穿越」屬性都不存在，所有家具都佔住格子', () => {
+  assert.ok(!D.furnitureList.some((f) => f.id.startsWith('rug') || f.cat === 'rug' || f.flat));
+  assert.ok(!D.FURNITURE_CATS.some((c) => c.id === 'rug'));
+  for (const def of D.furnitureList) {
+    const s = RC.state.newGame(RC.util.makeRng(1));
+    s.items = [{ uid: 1, id: def.id, x: 5, y: 5, rot: 0 }];
+    const g = new RC.Game(s, { seed: 1 });
+    assert.equal(g.grid.blocked[5 * g.grid.w + 5], 1, def.id + ' 應該佔住格子');
+  }
+});
+
+test('舊存檔裡的地毯（擺放中與倉庫）載入時按原價退款，並從存檔移除', () => {
+  const raw = JSON.parse(JSON.stringify(RC.state.newGame(RC.util.makeRng(1))));
+  raw.coins = 1000;
+  const keep = raw.items.length;
+  raw.items.push({ uid: 90, id: 'rug_red', x: 1, y: 1, rot: 0 }, { uid: 91, id: 'rug_blue', x: 1, y: 2, rot: 0 });
+  raw.inventory = { rug_tatami: 2, chair_wood: 1 };
+  const back = RC.state.normalize(raw);
+  assert.equal(back.coins, 1000 + 90 + 400 + 150 * 2);
+  assert.equal(back.items.length, keep, '地毯不再出現在餐廳裡');
+  assert.deepEqual(back.inventory, { chair_wood: 1 }, '倉庫只留下仍存在的商品');
+  // 再存一次、再讀一次，不會重複退款
+  const again = RC.state.parse(RC.state.serialize(back));
+  assert.equal(again.coins, back.coins);
+});
+
+test('任務文字不再提到地毯，裝飾任務只算裝飾', () => {
+  assert.ok(!D.quests.some((q) => q.text.includes('地毯')));
+  const g = mk(1);
+  const before = g.questProgress({ type: 'decor' });
+  g.s.coins = 1e5;
+  g.buyFurniture('plant_pot');
+  g.placeFromInventory('plant_pot', 6, 6, 0);
+  assert.equal(g.questProgress({ type: 'decor' }), before + 1);
+});

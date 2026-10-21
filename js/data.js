@@ -35,7 +35,7 @@
   }
 
   /* ───────── 家具 ───────── */
-  // cat: table 桌 / chair 椅 / stove 爐灶 / decor 裝飾 / func 功能 / rug 地毯(可走)
+  // cat: table 桌 / chair 椅 / stove 爐灶 / decor 裝飾 / func 功能
   const furnitureList = [
     // 桌子
     { id: 'table_wood', name: '木頭小桌', cat: 'table', w: 1, h: 1, price: 60, level: 1, appeal: 1, desc: '樸實的小木桌。' },
@@ -67,19 +67,16 @@
     { id: 'jukebox', name: '點唱機', cat: 'decor', w: 1, h: 1, price: 2200, level: 10, appeal: 18, desc: '復古音樂讓客人心情大好。' },
     { id: 'statue', name: '石獅', cat: 'decor', w: 1, h: 1, price: 3000, level: 12, appeal: 22, desc: '鎮守店門的威風石獅。' },
     { id: 'piano', name: '平台鋼琴', cat: 'decor', w: 2, h: 1, price: 6500, level: 14, appeal: 34, rot: true, desc: '現場演奏，格調滿分。' },
-    // 地毯（可行走）
-    { id: 'rug_red', name: '紅地毯', cat: 'rug', w: 1, h: 1, price: 90, level: 2, appeal: 1.5, flat: true, desc: '踩起來軟軟的。' },
-    { id: 'rug_tatami', name: '榻榻米墊', cat: 'rug', w: 1, h: 1, price: 150, level: 4, appeal: 2.5, flat: true, desc: '和風小格子。' },
-    { id: 'rug_blue', name: '青花地毯', cat: 'rug', w: 1, h: 1, price: 400, level: 7, appeal: 4, flat: true, desc: '青花瓷紋樣。' },
   ];
   const furniture = Object.fromEntries(furnitureList.map((f) => [f.id, f]));
+  // 已取消的商品（地毯會佔掉整格、上面不能再擺東西）：舊存檔裡的這些物品載入時按原價退款
+  const LEGACY_REFUND = { rug_red: 90, rug_tatami: 150, rug_blue: 400 };
   const FURNITURE_CATS = [
     { id: 'table', name: '桌子' },
     { id: 'chair', name: '椅子' },
     { id: 'stove', name: '爐灶' },
     { id: 'func', name: '功能' },
     { id: 'decor', name: '裝飾' },
-    { id: 'rug', name: '地毯' },
   ];
 
   /* ───────── 地板 / 牆壁主題 ───────── */
@@ -145,7 +142,7 @@
     { id: 'q5', type: 'table', n: 3, text: '擁有 3 張桌子', reward: 100 },
     { id: 'q6', type: 'staff', n: 2, text: '雇用第 2 位員工', reward: 120 },
     { id: 'q7', type: 'level', n: 3, text: '達到 3 級', reward: 150 },
-    { id: 'q8', type: 'decor', n: 2, text: '放置 2 件裝飾或地毯', reward: 150 },
+    { id: 'q8', type: 'decor', n: 2, text: '放置 2 件裝飾', reward: 150 },
     { id: 'q9', type: 'serve', n: 40, text: '服務 40 位客人', reward: 200 },
     { id: 'q10', type: 'stove', n: 2, text: '擁有 2 座爐灶', reward: 250 },
     { id: 'q11', type: 'expand', n: 1, text: '擴建餐廳', reward: 400 },
@@ -158,7 +155,7 @@
     { id: 'q18', type: 'stars', n: 4, text: '餐廳達到 4 星', reward: 2000 },
     { id: 'q19', type: 'expand', n: 2, text: '再次擴建餐廳', reward: 3000 },
     { id: 'q20', type: 'serve', n: 1000, text: '服務 1,000 位客人', reward: 4000 },
-    { id: 'q21', type: 'decor', n: 8, text: '放置 8 件裝飾或地毯', reward: 3000 },
+    { id: 'q21', type: 'decor', n: 8, text: '放置 8 件裝飾', reward: 3000 },
     { id: 'q22', type: 'learn', n: 10, text: '學會 10 道菜', reward: 6000 },
     { id: 'q23', type: 'stars', n: 7, text: '餐廳達到 7 星', reward: 10000 },
     { id: 'q24', type: 'level', n: 15, text: '達到 15 級', reward: 15000 },
@@ -187,7 +184,7 @@
   RC.data = {
     DX, DY, DOOR_Y,
     dishList, dishes, MASTERY_STEPS, masteryLevel,
-    furnitureList, furniture, FURNITURE_CATS,
+    furnitureList, furniture, FURNITURE_CATS, LEGACY_REFUND,
     floorList, floors, wallList, walls,
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,

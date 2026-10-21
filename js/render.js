@@ -230,9 +230,6 @@
       const sitters = new Map();
       for (const c of game.customers) if (SEATED.includes(c.state)) sitters.set(c.seat, c);
 
-      // 地毯先畫
-      for (const it of s.items) if (D.furniture[it.id].flat) this.drawItemSprite(g, it);
-
       // 烹飪中的爐灶冒蒸氣
       this.stoveTimer -= this.frameDt;
       if (this.stoveTimer <= 0) {
@@ -248,7 +245,6 @@
 
       for (const it of s.items) {
         const def = D.furniture[it.id];
-        if (def.flat) continue;
         const fp = RC.world.footprint(def, it.rot);
         const key = it.x + fp.w / 2 + (it.y + fp.h / 2);
         if (def.cat === 'chair') {
@@ -569,12 +565,6 @@
         const x = Math.floor(lx - (p[0] - e.ax));
         const y = Math.floor(ly - (p[1] - e.ay));
         if (x < 0 || y < 0 || x >= e.c.width || y >= e.c.height) continue;
-        if (def.flat) {
-          // 地毯：以格子判斷
-          const [gx, gy] = this.unproj(lx, ly);
-          if (Math.floor(gx) === it.x && Math.floor(gy) === it.y) return it;
-          continue;
-        }
         if (!e.data) e.data = ctx(e.c).getImageData(0, 0, e.c.width, e.c.height).data;
         if (e.data[(y * e.c.width + x) * 4 + 3] > 40) return it;
       }

@@ -1152,7 +1152,7 @@
         case 'chair': return this.countCat('chair');
         case 'table': return this.countCat('table');
         case 'stove': return this.countCat('stove');
-        case 'decor': return this.countCat('decor', 'rug');
+        case 'decor': return this.countCat('decor');
         case 'serve': return s.stats.served;
         case 'learn': return Object.keys(s.dishes).length;
         case 'staff': return s.staff.length;

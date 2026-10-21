@@ -9,7 +9,7 @@
     return rot & 1 ? { w: def.h, h: def.w } : { w: def.w, h: def.h };
   }
 
-  /** 由物件清單建立格子。blocked=不可行走；occ=該格上的物件（含地毯）。 */
+  /** 由物件清單建立格子。blocked=不可行走；occ=該格上的物件。 */
   function buildGrid(items, w, h, doorY) {
     const occ = new Array(w * h).fill(null);
     const blocked = new Uint8Array(w * h);
@@ -23,7 +23,7 @@
           const y = it.y + dy;
           if (x < 0 || y < 0 || x >= w || y >= h) continue;
           occ[y * w + x] = it;
-          if (!def.flat) blocked[y * w + x] = 1;
+          blocked[y * w + x] = 1;
         }
       }
     }

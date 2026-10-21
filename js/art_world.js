@@ -1,4 +1,4 @@
-/* 像素美術（場景）：地板、牆壁、地毯、全部家具。皆於載入時程式化繪製成小圖。 */
+/* 像素美術（場景）：地板、牆壁、全部家具。皆於載入時程式化繪製成小圖。 */
 (function (G) {
   'use strict';
   const RC = (G.RC = G.RC || {});
@@ -10,7 +10,7 @@
   const SLAB = 6;
   const frac = (v) => v - Math.floor(v);
 
-  /* ───────── 地板 / 地毯：逐像素著色器 ───────── */
+  /* ───────── 地板：逐像素著色器 ───────── */
 
   /** 32×16 菱形；fn(u,v,x,y) 回傳顏色或 null */
   function bakeTile(fn) {
@@ -70,27 +70,6 @@
       let col = alt ? '#e7e4ea' : '#efecf1';
       if (Math.abs(vein) < 0.12) col = '#cfccd8';
       return col;
-    },
-  };
-
-  const RUGS = {
-    rug_red: (u, v) => {
-      if (u < 0.1 || u > 0.9 || v < 0.1 || v > 0.9) return '#e0b44a';
-      if (u < 0.18 || u > 0.82 || v < 0.18 || v > 0.82) return '#8f2420';
-      const d = Math.abs(u - 0.5) + Math.abs(v - 0.5);
-      return d < 0.2 ? '#e0b44a' : d < 0.28 ? '#b4322b' : '#c9423a';
-    },
-    rug_tatami: (u, v, x, y) => {
-      if (u < 0.08 || u > 0.92 || v < 0.08 || v > 0.92) return '#3f4d27';
-      if (Math.abs(u - 0.5) < 0.04) return '#6c7a46';
-      return (y & 1 ? '#b9c47a' : '#aab86a');
-    },
-    rug_blue: (u, v) => {
-      if (u < 0.08 || u > 0.92 || v < 0.08 || v > 0.92) return '#1f4f9a';
-      const d = Math.abs(u - 0.5) + Math.abs(v - 0.5);
-      if (d < 0.14) return '#2b63bd';
-      if (d < 0.3 && d > 0.22) return '#2b63bd';
-      return '#eef3fb';
     },
   };
 
@@ -522,9 +501,6 @@
     b.dot(0.4, 0.5, 22, '#55555f', 6, 1);
   } };
 
-  /* 地毯由 RUGS 烘焙，這裡只登記 */
-  for (const id of Object.keys(RUGS)) DRAW[id] = { h: 0, rug: true, fn() {} };
-
   /* ───────── 對外介面 ───────── */
 
   const furnCache = new Map();
@@ -546,15 +522,10 @@
     const c = canvas((fp.w + fp.h) * 16 + pad * 2, (fp.w + fp.h) * 8 + H + pad * 2);
     const ax = fp.h * 16 + pad;
     const ay = H + pad;
-    if (dr.rug) {
-      const t = rugTile(id);
-      ctx(c).drawImage(t, ax - 16, ay);
-    } else {
-      const swap = !!(rr & 1) && !isChair;
-      const b = brush(ctx(c), ax, ay, swap);
-      dr.fn(b, { rot: rr, face: rr, part: part || 'all', fw: fp.w, fh: fp.h });
-      outline(c);
-    }
+    const swap = !!(rr & 1) && !isChair;
+    const b = brush(ctx(c), ax, ay, swap);
+    dr.fn(b, { rot: rr, face: rr, part: part || 'all', fw: fp.w, fh: fp.h });
+    outline(c);
     e = { c, ax, ay };
     furnCache.set(key, e);
     return e;
@@ -564,12 +535,6 @@
     const key = 'f:' + id + ':' + (alt ? 1 : 0);
     let t = tileCache.get(key);
     if (!t) tileCache.set(key, (t = bakeTile(FLOORS[id](!!alt))));
-    return t;
-  }
-  function rugTile(id) {
-    const key = 'r:' + id;
-    let t = tileCache.get(key);
-    if (!t) tileCache.set(key, (t = bakeTile(RUGS[id])));
     return t;
   }
   const wallSegCache = new Map();
@@ -589,5 +554,5 @@
     return r;
   }
 
-  RC.artWorld = { WALL_H, SLAB, furniture, floorTile, rugTile, wallSeg, roomLayer, DRAW };
+  RC.artWorld = { WALL_H, SLAB, furniture, floorTile, wallSeg, roomLayer, DRAW };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
