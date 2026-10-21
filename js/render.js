@@ -172,11 +172,26 @@
       g.drawImage(this.layer.c, this.x0, this.y0);
       if (this.edit) this.drawGrid(g);
       this.drawWorld(g);
+      this.drawNight(g, W, H);
       this.drawFx(g);
       // 放大輸出
       const out = this.g;
       out.imageSmoothingEnabled = false;
       out.drawImage(this.low, 0, 0, W * this.S, H * this.S);
+    }
+
+    /** 夜間降低亮度：20:00 起漸暗，到 22:00 最暗，05:00 起漸亮，07:00 恢復 */
+    drawNight(g, W, H) {
+      const game = this.game;
+      if (!game.dayMode) return;
+      const h = game.hour;
+      let a = 0;
+      if (h >= 20 && h < 22) a = (h - 20) / 2;
+      else if (h >= 22 || h < 5) a = 1;
+      else if (h < 7) a = (7 - h) / 2;
+      if (a <= 0) return;
+      g.fillStyle = `rgba(16,24,70,${(0.38 * a).toFixed(3)})`;
+      g.fillRect(0, 0, W, H);
     }
 
     drawBackdrop(g, W, H) {
@@ -230,9 +245,6 @@
       const sitters = new Map();
       for (const c of game.customers) if (SEATED.includes(c.state)) sitters.set(c.seat, c);
 
-      // 地毯先畫
-      for (const it of s.items) if (D.furniture[it.id].flat) this.drawItemSprite(g, it);
-
       // 烹飪中的爐灶冒蒸氣
       this.stoveTimer -= this.frameDt;
       if (this.stoveTimer <= 0) {
@@ -248,7 +260,6 @@
 
       for (const it of s.items) {
         const def = D.furniture[it.id];
-        if (def.flat) continue;
         const fp = RC.world.footprint(def, it.rot);
         const key = it.x + fp.w / 2 + (it.y + fp.h / 2);
         if (def.cat === 'chair') {
@@ -269,7 +280,17 @@
         }
       }
       for (const c of game.customers) if (!SEATED.includes(c.state) && c.state !== 'arrive') list.push({ k: c.x + c.y, f: () => this.drawCustomer(g, c) });
-      for (const m of game.crew) list.push({ k: m.x + m.y + 0.02, f: () => this.drawStaff(g, m) });
+      for (const m of game.crew) {
+        if (m.onDuty) list.push({ k: m.x + m.y + 0.02, f: () => this.drawStaff(g, m) }); // 下班的人不在店裡
+        else m._sx = null;
+      }
+      // 洗碗槽上堆著待洗的髒餐具
+      if (s.sinkDirty > 0) {
+        for (const sk of game.sinks) {
+          const p = this.proj(sk.x + 0.5, sk.y + 0.5);
+          list.push({ k: sk.x + sk.y + 1.05, f: () => g.drawImage(AP.fx('plates'), Math.round(p[0] - 4), Math.round(p[1] - 33)) });
+        }
+      }
 
       // 桌上的餐點與金幣
       for (const c of game.customers) {
@@ -383,7 +404,7 @@
         if (c.vip && c.state !== 'leave') g.drawImage(AP.fx('spark'), Math.round(c._sx + 8), Math.round(c._sy - 30 + Math.sin(t * 5) * 2));
       }
       for (const m of game.crew) {
-        if (m._sx == null) continue;
+        if (m._sx == null || !m.onDuty) continue;
         const top = m._sy - 33;
         if (m.state === 'cooking') this.bar(g, m._sx, top, m.cookTotal ? 1 - m.t / m.cookTotal : 0, '#ff9a3a');
         else if (m.state === 'cleaning') this.bar(g, m._sx, top, m.cleanTotal ? 1 - m.t / m.cleanTotal : 0, '#6fc3e0');
@@ -394,8 +415,20 @@
         } else if (m.state === 'wait_stove') {
           const b = AP.bubble(g, m._sx, top, 15, 11, '#fff0c0');
           g.drawImage(AP.fx('dots'), b.x + 2, b.y + 1);
+        } else if (m.state === 'washing') this.bar(g, m._sx, top, m.washTotal ? 1 - m.t / m.washTotal : 0, '#6fc3e0');
+        else if (m.state === 'wait_plate') {
+          const b = AP.bubble(g, m._sx, top, 15, 11, '#ffd0c8');
+          g.drawImage(AP.fx('dots'), b.x + 2, b.y + 1);
+        } else if (m.carryPlates > 0) {
+          g.drawImage(AP.fx('plates'), Math.round(m._sx - 4), Math.round(top - 4 + Math.sin(t * 8)));
         } else if (m.carry) {
           g.drawImage(AP.dish(m.carry), Math.round(m._sx - 6), Math.round(top - 8 + Math.sin(t * 8)));
+        }
+        if (m.rec.manager) {
+          g.fillStyle = '#4a82c8';
+          g.fillRect(Math.round(m._sx - 7), Math.round(top + 7), 3, 3);
+          g.fillStyle = '#ffffff';
+          g.fillRect(Math.round(m._sx - 6), Math.round(top + 8), 1, 1);
         }
         if (!m.boss && m.rec.energy < 30 && m.state !== 'rest') g.drawImage(AP.icon('bolt'), Math.round(m._sx + 5), Math.round(top + 6));
       }
@@ -544,6 +577,7 @@
       const hit = (e, w, hgt, depth) => e._sx != null && Math.abs(lx - e._sx) <= w && ly >= e._sy - hgt && ly <= e._sy + 3 ? { depth } : null;
       let top = null;
       for (const m of game.crew) {
+        if (!m.onDuty) continue;
         const h = hit(m, 7, 30, m.x + m.y);
         if (h && (!top || h.depth > top.depth)) top = { type: 'staff', id: m.id, depth: h.depth };
       }
@@ -569,12 +603,6 @@
         const x = Math.floor(lx - (p[0] - e.ax));
         const y = Math.floor(ly - (p[1] - e.ay));
         if (x < 0 || y < 0 || x >= e.c.width || y >= e.c.height) continue;
-        if (def.flat) {
-          // 地毯：以格子判斷
-          const [gx, gy] = this.unproj(lx, ly);
-          if (Math.floor(gx) === it.x && Math.floor(gy) === it.y) return it;
-          continue;
-        }
         if (!e.data) e.data = ctx(e.c).getImageData(0, 0, e.c.width, e.c.height).data;
         if (e.data[(y * e.c.width + x) * 4 + 3] > 40) return it;
       }

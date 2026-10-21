@@ -35,7 +35,7 @@
   }
 
   /* ───────── 家具 ───────── */
-  // cat: table 桌 / chair 椅 / stove 爐灶 / decor 裝飾 / func 功能 / rug 地毯(可走)
+  // cat: table 桌 / chair 椅 / stove 爐灶 / decor 裝飾 / func 功能
   const furnitureList = [
     // 桌子
     { id: 'table_wood', name: '木頭小桌', cat: 'table', w: 1, h: 1, price: 60, level: 1, appeal: 1, desc: '樸實的小木桌。' },
@@ -53,9 +53,10 @@
     { id: 'stove_gas', name: '瓦斯爐', cat: 'stove', w: 1, h: 1, price: 150, level: 1, appeal: 0, speed: 1.0, desc: '基本款爐灶。' },
     { id: 'stove_wok', name: '快炒爐', cat: 'stove', w: 1, h: 1, price: 700, level: 4, appeal: 1, speed: 1.25, desc: '大火快炒，烹飪速度 ×1.25。' },
     { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, desc: '蒸氣十足，烹飪速度 ×1.5。' },
-    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '米其林等級，烹飪速度 ×1.85。' },
+    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '專業餐廳等級，烹飪速度 ×1.85。' },
     // 功能
     { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
+    { id: 'sink', name: '洗碗槽', cat: 'func', w: 1, h: 1, price: 300, level: 1, appeal: 0, fn: 'sink', desc: '客人用過的餐具要送到這裡，由員工洗乾淨；沒有乾淨的盤子就不能出餐。多一個洗碗槽，可以讓更多人同時洗碗。' },
     { id: 'fridge', name: '冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', desc: '食材取用方便，烹飪時間 -6%（最多 3 台生效）。' },
     // 裝飾
     { id: 'plant_pot', name: '小盆栽', cat: 'decor', w: 1, h: 1, price: 70, level: 1, appeal: 2, desc: '一抹綠意。' },
@@ -67,19 +68,16 @@
     { id: 'jukebox', name: '點唱機', cat: 'decor', w: 1, h: 1, price: 2200, level: 10, appeal: 18, desc: '復古音樂讓客人心情大好。' },
     { id: 'statue', name: '石獅', cat: 'decor', w: 1, h: 1, price: 3000, level: 12, appeal: 22, desc: '鎮守店門的威風石獅。' },
     { id: 'piano', name: '平台鋼琴', cat: 'decor', w: 2, h: 1, price: 6500, level: 14, appeal: 34, rot: true, desc: '現場演奏，格調滿分。' },
-    // 地毯（可行走）
-    { id: 'rug_red', name: '紅地毯', cat: 'rug', w: 1, h: 1, price: 90, level: 2, appeal: 1.5, flat: true, desc: '踩起來軟軟的。' },
-    { id: 'rug_tatami', name: '榻榻米墊', cat: 'rug', w: 1, h: 1, price: 150, level: 4, appeal: 2.5, flat: true, desc: '和風小格子。' },
-    { id: 'rug_blue', name: '青花地毯', cat: 'rug', w: 1, h: 1, price: 400, level: 7, appeal: 4, flat: true, desc: '青花瓷紋樣。' },
   ];
   const furniture = Object.fromEntries(furnitureList.map((f) => [f.id, f]));
+  // 已取消的商品（地毯會佔掉整格、上面不能再擺東西）：舊存檔裡的這些物品載入時按原價退款
+  const LEGACY_REFUND = { rug_red: 90, rug_tatami: 150, rug_blue: 400 };
   const FURNITURE_CATS = [
     { id: 'table', name: '桌子' },
     { id: 'chair', name: '椅子' },
     { id: 'stove', name: '爐灶' },
     { id: 'func', name: '功能' },
     { id: 'decor', name: '裝飾' },
-    { id: 'rug', name: '地毯' },
   ];
 
   /* ───────── 地板 / 牆壁主題 ───────── */
@@ -113,15 +111,20 @@
   const MAX_LEVEL = 50;
   const xpForLevel = (lv) => Math.round(12 * Math.pow(lv, 1.5) + 8);
   const levelReward = (lv) => 40 * lv;
-  const STAR_STEPS = [0, 15, 40, 80, 140, 230, 360, 560, 850, 1300];
+  // 餐廳星級仿米其林：最高三星。0 星代表尚未評星；數字是達標所需的「魅力」。
+  const STAR_STEPS = [40, 160, 400]; // 一星、二星、三星
+  const MAX_STARS = STAR_STEPS.length;
+  const STAR_TITLES = ['尚未評星', '一星・值得一訪', '二星・值得繞道前往', '三星・值得專程前往'];
   function starsForAppeal(a) {
-    let s = 1;
-    for (let i = 1; i < STAR_STEPS.length; i++) if (a >= STAR_STEPS[i]) s = i + 1;
+    let s = 0;
+    for (let i = 0; i < STAR_STEPS.length; i++) if (a >= STAR_STEPS[i]) s = i + 1;
     return s;
   }
+  /** 下一顆星需要的魅力；已經三星則回傳 null */
+  const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
   const maxStaffForLevel = (lv) => Math.min(8, 1 + (lv >= 2) + (lv >= 4) + (lv >= 6) + (lv >= 9) + (lv >= 12) + (lv >= 15) + (lv >= 18));
   const HIRE_BASE = [0, 200, 600, 1500, 3500, 8000, 16000, 30000];
-  const STAFF_XP_STEPS = [0, 12, 30, 60, 100, 160, 240, 340, 460];
+  const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430]; // 最高 10 級
   const FEED_COST = 15;
   const FEED_AMOUNT = 50;
 
@@ -145,25 +148,62 @@
     { id: 'q5', type: 'table', n: 3, text: '擁有 3 張桌子', reward: 100 },
     { id: 'q6', type: 'staff', n: 2, text: '雇用第 2 位員工', reward: 120 },
     { id: 'q7', type: 'level', n: 3, text: '達到 3 級', reward: 150 },
-    { id: 'q8', type: 'decor', n: 2, text: '放置 2 件裝飾或地毯', reward: 150 },
+    { id: 'q8', type: 'decor', n: 2, text: '放置 2 件裝飾', reward: 150 },
     { id: 'q9', type: 'serve', n: 40, text: '服務 40 位客人', reward: 200 },
     { id: 'q10', type: 'stove', n: 2, text: '擁有 2 座爐灶', reward: 250 },
     { id: 'q11', type: 'expand', n: 1, text: '擴建餐廳', reward: 400 },
-    { id: 'q12', type: 'stars', n: 2, text: '餐廳達到 2 星', reward: 300 },
+    { id: 'q12', type: 'stars', n: 1, text: '餐廳獲得一星評價（值得一訪）', reward: 300 },
     { id: 'q13', type: 'earn', n: 5000, text: '累計賺取 5,000 金幣', reward: 500 },
     { id: 'q14', type: 'learn', n: 5, text: '學會 5 道菜', reward: 600 },
     { id: 'q15', type: 'staff', n: 4, text: '擁有 4 位員工', reward: 800 },
     { id: 'q16', type: 'mastery', n: 60, text: '同一道菜烹飪 60 次（熟練度 4 級）', reward: 1000 },
     { id: 'q17', type: 'level', n: 8, text: '達到 8 級', reward: 1500 },
-    { id: 'q18', type: 'stars', n: 4, text: '餐廳達到 4 星', reward: 2000 },
+    { id: 'q18', type: 'stars', n: 2, text: '餐廳獲得二星評價（值得繞道前往）', reward: 2000 },
     { id: 'q19', type: 'expand', n: 2, text: '再次擴建餐廳', reward: 3000 },
     { id: 'q20', type: 'serve', n: 1000, text: '服務 1,000 位客人', reward: 4000 },
-    { id: 'q21', type: 'decor', n: 8, text: '放置 8 件裝飾或地毯', reward: 3000 },
+    { id: 'q21', type: 'decor', n: 8, text: '放置 8 件裝飾', reward: 3000 },
     { id: 'q22', type: 'learn', n: 10, text: '學會 10 道菜', reward: 6000 },
-    { id: 'q23', type: 'stars', n: 7, text: '餐廳達到 7 星', reward: 10000 },
+    { id: 'q23', type: 'serve', n: 3000, text: '服務 3,000 位客人', reward: 10000 },
     { id: 'q24', type: 'level', n: 15, text: '達到 15 級', reward: 15000 },
-    { id: 'q25', type: 'stars', n: 10, text: '成為傳說中的 10 星餐廳', reward: 50000 },
+    { id: 'q25', type: 'stars', n: 3, text: '成為三星餐廳（值得專程前往）', reward: 50000 },
   ];
+
+  /* ───────── 天數 / 營業 / 排班 ───────── */
+  const DAY = {
+    hourReal: 25, // 營業中：遊戲內 1 小時 = 真實 25 秒（一天約 10 分鐘）
+    nightFast: 6, // 打烊、店裡沒客人也沒活要做時，時間快轉的倍率
+    defaultOpen: 9, // 預設營業時間 09:00 ~ 17:00（剛好是一個班）
+    defaultClose: 17,
+    shiftHours: 8, // 友善職場：每位員工每天最多上班 8 小時（硬性規定，不能超時）
+    restFullHours: 2, // 離開崗位休息滿 2 小時，體力自動恢復
+    managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
+  };
+
+  /* ───────── 遊戲版次 ───────── */
+  // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
+  // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
+  const GAME_VERSION = { current: 2, maxGap: 2 };
+
+  /* ───────── 風評 ───────── */
+  // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
+  // 風評一直停在谷底（-10）連續 15 天，餐廳就倒閉、遊戲終止。
+  const REPUTATION = {
+    min: -10,
+    max: 10,
+    happy: 0.1, // 每位客人結帳離開
+    fastBonus: 0.15, // 結帳等得越短，額外加分越多（最多這個值）
+    selfCheckout: 0.04, // 沒人來收、自助結帳
+    angry: -1, // 每組有人氣走
+    walkout: -0.35, // 在門外等不到位子離開
+    turnaway: -0.15, // 候位已滿，客人直接掉頭離開
+    loseDays: 15,
+    warnDays: [1, 5, 10, 13, 14], // 連續幾天谷底時提醒玩家
+    arrivalEffect: 0.03, // 風評每 +1：客人上門速度 +3%（負的就變慢）
+  };
+
+  /* ───────── 餐具 / 洗碗 ───────── */
+  // 盤子總數 = base + 每個座位 perSeat 個；用過的先放在桌上，收拾後送到洗碗槽，洗乾淨才能再用
+  const PLATES = { base: 8, perSeat: 2, washTime: 1.0, dropTime: 0.3 };
 
   /* ───────── 群體客人 / 候位 / 離線收益 ───────── */
   const PARTY_MAX = 4; // 每組人數上限
@@ -187,14 +227,14 @@
   RC.data = {
     DX, DY, DOOR_Y,
     dishList, dishes, MASTERY_STEPS, masteryLevel,
-    furnitureList, furniture, FURNITURE_CATS,
+    furnitureList, furniture, FURNITURE_CATS, LEGACY_REFUND,
     floorList, floors, wallList, walls,
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,
-    STAR_STEPS, starsForAppeal,
+    STAR_STEPS, MAX_STARS, STAR_TITLES, starsForAppeal, nextStarAppeal,
     maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

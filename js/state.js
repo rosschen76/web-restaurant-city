@@ -5,7 +5,7 @@
   const D = RC.data;
 
   const SAVE_KEY = 'pixel-restaurant-city/save';
-  const SAVE_VERSION = 1;
+  const SAVE_VERSION = D.GAME_VERSION.current;
 
   function makeLook(rng) {
     return {
@@ -44,6 +44,8 @@
       xp: 0,
       energy: 100,
       boss: !!cand.boss,
+      shift: Number.isInteger(cand.shift) ? cand.shift : D.DAY.defaultOpen, // 上班時間（整點）：從這個鐘點起連續 8 小時
+      manager: false, // 值班店長（Lv.10 起可任命）
     };
   }
 
@@ -55,6 +57,7 @@
       speed: 1.15,
       skill: 1.1,
       boss: true,
+      shift: D.DAY.defaultOpen,
     };
     const s = {
       v: SAVE_VERSION,
@@ -72,13 +75,20 @@
       nextStaffId: 2,
       candidates: [],
       quest: { i: 0 },
+      sinkDirty: 0, // 洗碗槽裡等著洗的髒盤子
+      day: 1,
+      clock: D.DAY.defaultOpen * 60, // 一天中的第幾分鐘
+      schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
+      reputation: 0,
+      lowDays: 0, // 風評連續停在谷底的天數
+      over: null, // 遊戲終止資訊
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       settings: { sound: true, music: true, sfxVol: 0.8, musicVol: 0.7, speed: 1 },
       flags: { welcomed: false },
       savedAt: 0,
     };
     const add = (id, x, y, rot) => s.items.push({ uid: s.nextUid++, id, x, y, rot: rot || 0 });
-    // 起始擺設：兩張桌各兩張椅（不併桌，所以至少要兩桌）、一座爐灶、一盆小植物
+    // 起始擺設：兩張桌各兩張椅（不併桌，所以至少要兩桌）、一座爐灶、一個洗碗槽、一盆小植物
     add('stove_gas', 5, 0, 0);
     add('table_wood', 3, 4, 0);
     add('chair_stool', 2, 4, 0);
@@ -87,6 +97,7 @@
     add('chair_stool', 2, 6, 0);
     add('chair_stool', 4, 6, 2);
     add('plant_pot', 7, 0, 0);
+    add('sink', 3, 0, 0);
     for (let i = 0; i < 3; i++) s.candidates.push(makeCandidate(rng, s.staff.map((m) => m.name)));
     return s;
   }
@@ -116,6 +127,11 @@
     // 物件：已知 id、座標在範圍內、不重疊
     s.items = [];
     s.nextUid = 1;
+    // 已取消的商品（地毯）：擺放中與倉庫裡的都按原價退款
+    let refund = 0;
+    for (const it of Array.isArray(raw.items) ? raw.items : []) if (it && D.LEGACY_REFUND[it.id]) refund += D.LEGACY_REFUND[it.id];
+    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.LEGACY_REFUND[id] && n > 0) refund += D.LEGACY_REFUND[id] * Math.floor(num(n, 0, 0, 9999));
+    s.coins += refund;
     const exp = D.expansions[st];
     const taken = new Set();
     for (const it of Array.isArray(raw.items) ? raw.items : []) {
@@ -140,6 +156,26 @@
     }
     s.inventory = {};
     for (const [id, n] of Object.entries(raw.inventory || {})) if (D.furniture[id] && n > 0) s.inventory[id] = Math.floor(num(n, 0, 0, 9999));
+    s.sinkDirty = Math.floor(num(raw.sinkDirty, 0, 0, 1e6));
+    s.day = Math.floor(num(raw.day, 1, 1, 1e6));
+    s.clock = num(raw.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
+    const sc = raw.schedule || {};
+    const open = Math.floor(num(sc.open, D.DAY.defaultOpen, 0, 23));
+    const close = Math.floor(num(sc.close, D.DAY.defaultClose, 1, 24));
+    s.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
+    s.reputation = num(raw.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
+    s.lowDays = Math.floor(num(raw.lowDays, 0, 0, 1e4));
+    const ov = raw.over;
+    s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
+    // 舊存檔沒有洗碗槽：自動補一個（優先放在靠牆的一排；沒有空位就放進倉庫）
+    if (!s.items.some((i) => i.id === 'sink') && !(s.inventory.sink > 0)) {
+      let spot = null;
+      for (let y = 0; y < exp.h && !spot; y++)
+        for (let x = 0; x < exp.w && !spot; x++) if (!taken.has(x + ',' + y) && !(y === D.DOOR_Y && x <= 1)) spot = { x, y };
+      if (spot) s.items.push({ uid: s.nextUid++, id: 'sink', x: spot.x, y: spot.y, rot: 0 });
+      else s.inventory.sink = 1;
+      s.flags.addedSink = true;
+    }
     s.dishes = { danbing: { cooked: 0 } };
     for (const [id, v] of Object.entries(raw.dishes || {})) if (D.dishes[id]) s.dishes[id] = { cooked: Math.floor(num(v && v.cooked, 0, 0, 1e9)) };
     const staff = [];
@@ -165,6 +201,8 @@
         xp: Math.floor(num(m.xp, 0, 0, 1e9)),
         energy: num(m.energy, 100, 0, 100),
         boss: !!m.boss,
+        shift: Math.floor(num(m.shift, D.DAY.defaultOpen, 0, 23)),
+        manager: !!m.manager,
       });
       maxId = Math.max(maxId, id);
     }
@@ -172,6 +210,12 @@
       // 一定要有且只有一位店掌櫃（舊存檔沒有這個欄位：第一位員工就是掌櫃）
       const first = staff.findIndex((m) => m.boss);
       staff.forEach((m, i) => (m.boss = i === (first < 0 ? 0 : first)));
+      // 值班店長：最多一位、不能是掌櫃、要達到門檻等級
+      let seenManager = false;
+      for (const m of staff) {
+        if (m.manager && (m.boss || m.level < D.DAY.managerLevel || seenManager)) m.manager = false;
+        if (m.manager) seenManager = true;
+      }
       s.staff = staff;
       s.nextStaffId = maxId + 1;
     }
@@ -203,7 +247,7 @@
       musicVol: num(se.musicVol, 0.7, 0, 1),
       speed: [1, 2, 3].includes(se.speed) ? se.speed : 1,
     };
-    s.flags = { welcomed: !!(raw.flags && raw.flags.welcomed) };
+    s.flags = { welcomed: !!(raw.flags && raw.flags.welcomed), addedSink: s.flags.addedSink, sinkToldAt: raw.flags && raw.flags.sinkToldAt ? 1 : 0 };
     s.savedAt = num(raw.savedAt, 0, 0, 1e15);
     return s;
   }
@@ -213,11 +257,40 @@
     return RC.codec.encode(JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }));
   }
 
-  /** 解析存檔字串；格式不對或被改過會丟出錯誤。匯入玩家貼上的文字時只接受編碼過的格式。 */
+  /**
+   * 檢查存檔版次。沒有版次欄位的視為版次 1（最早期的存檔）。
+   * 回傳 { ok, version, reason }：reason 為 'old'（比目前舊太多）、'new'（比目前還新）或 'bad'。
+   */
+  function checkVersion(v) {
+    const cur = D.GAME_VERSION.current;
+    const ver = v === undefined || v === null ? 1 : v;
+    if (typeof ver !== 'number' || !isFinite(ver) || ver < 1 || Math.floor(ver) !== ver) return { ok: false, version: ver, reason: 'bad' };
+    if (ver > cur) return { ok: false, version: ver, reason: 'new' };
+    if (cur - ver > D.GAME_VERSION.maxGap) return { ok: false, version: ver, reason: 'old' };
+    return { ok: true, version: ver };
+  }
+
+  /** 版次不合時丟出的錯誤（帶有 code='version' 與檢查結果） */
+  function versionError(chk) {
+    const err = new Error(chk.reason === 'new' ? `存檔來自較新的版次 ${chk.version}（目前是 ${D.GAME_VERSION.current}）` : `存檔版次 ${chk.version} 與目前版次 ${D.GAME_VERSION.current} 差太多`);
+    err.code = 'version';
+    err.check = chk;
+    return err;
+  }
+
+  /** 把 JSON 文字轉成 state：先確認版次再整理資料 */
+  function fromJSON(plain, rng) {
+    const raw = JSON.parse(plain);
+    const chk = checkVersion(raw && typeof raw === 'object' ? raw.v : undefined);
+    if (!chk.ok) throw versionError(chk);
+    return normalize(raw, rng);
+  }
+
+  /** 解析存檔字串；格式不對、被改過或版次差太多會丟出錯誤。匯入玩家貼上的文字時只接受編碼過的格式。 */
   function parse(text, rng) {
     const plain = RC.codec.decode(text);
     if (plain === null) throw new Error('存檔格式不正確或已被修改');
-    return normalize(JSON.parse(plain), rng);
+    return fromJSON(plain, rng);
   }
 
   function getStorage() {
@@ -240,25 +313,27 @@
   }
 
   /**
-   * 讀檔；沒有存檔或壞檔時回傳 null。loadStatus 為 'none' | 'ok' | 'corrupt'。
+   * 讀檔；沒有存檔或壞檔時回傳 null。loadStatus 為 'none' | 'ok' | 'corrupt' | 'incompatible'（版次差太多）。
    * 讀不出來的存檔（損毀或被改過）會備份到另一個鍵再重新開始，不會直接消失。
    * 相容舊版（編碼機制上線前）的明文 JSON 存檔：讀取後下次存檔就會變成編碼格式。
    */
   function load(storage, rng) {
     state.loadStatus = 'none';
+    state.loadInfo = null;
     storage = storage || getStorage();
     if (!storage) return null;
     let text = null;
     try {
       text = storage.getItem(SAVE_KEY);
       if (!text) return null;
-      const st = text.trim().startsWith('{') ? normalize(JSON.parse(text), rng) : parse(text, rng);
+      const st = text.trim().startsWith('{') ? fromJSON(text, rng) : parse(text, rng);
       state.loadStatus = 'ok';
       return st;
     } catch (e) {
-      state.loadStatus = 'corrupt';
+      state.loadStatus = e && e.code === 'version' ? 'incompatible' : 'corrupt';
+      state.loadInfo = e && e.check ? e.check : null;
       try {
-        if (text) storage.setItem(SAVE_KEY + '/corrupt-backup', text);
+        if (text) storage.setItem(SAVE_KEY + (state.loadStatus === 'incompatible' ? '/incompatible-backup' : '/corrupt-backup'), text);
       } catch (e2) {
         /* 備份失敗就算了 */
       }
@@ -275,5 +350,5 @@
     }
   }
 
-  const state = (RC.state = { loadStatus: 'none', SAVE_KEY, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost });
+  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

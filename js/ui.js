@@ -11,6 +11,9 @@
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
   const ic = (name, scale) => `<img class="px" src="${AP.iconURL(name, scale || 2)}" width="${12 * (scale || 2)}" height="${12 * (scale || 2)}" alt="">`;
 
+  const hhmm = (h) => String(((h % 24) + 24) % 24).padStart(2, '0') + ':00';
+  const shiftText = (start) => `${hhmm(start)} – ${hhmm(start + D.DAY.shiftHours)}`;
+
   const avatarCache = new Map();
   function avatar(look, staff, boss) {
     const key = JSON.stringify(look) + staff + (boss ? 'B' : '');
@@ -26,7 +29,7 @@
     return u;
   }
 
-  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_pay: '去結帳', paying: '收款中' };
+  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_pay: '去結帳', paying: '收款中', wait_plate: '等乾淨盤子', to_sink: '送餐具去洗碗槽', dropping: '放下餐具', to_wash: '去洗碗', washing: '洗碗中' };
   const PANELS = {
     shop: { title: '商店', icon: 'shop' },
     inv: { title: '倉庫', icon: 'box' },
@@ -66,7 +69,12 @@
       this.bindGame();
       this.bindInput();
       this.refreshHud();
-      if (!game.s.flags.welcomed) this.showWelcome();
+      if (game.s.over) this.showGameOver();
+      else if (!game.s.flags.welcomed) this.showWelcome();
+      else if (game.s.flags.addedSink && !game.s.flags.sinkToldAt) {
+        game.s.flags.sinkToldAt = 1;
+        this.toast('新增了洗碗槽：髒餐具要先送去洗，沒有乾淨盤子就不能出菜。', 'good');
+      }
     }
 
     /* ───────── HUD ───────── */
@@ -78,6 +86,7 @@
           <div class="hud-info">
             <div class="rname"><span id="rname"></span></div>
             <div class="stars" id="stars"></div>
+            <div class="clockline" id="clock"></div>
             <div class="bar xp"><i id="xpbar"></i></div>
             <div class="bar-label" id="xplabel"></div>
           </div>
@@ -85,6 +94,7 @@
         <div class="quest-card pbox" id="quest" data-act="open-quest" hidden></div></div>
         <div class="hud-tr">
           <div class="coin-pill pbox" id="coinpill">${ic('coin', 2)}<span id="coins">0</span></div>
+          <button class="btn icon-btn" id="btn-pause" title="暫停／繼續（空白鍵）" aria-label="暫停或繼續"></button>
           <button class="btn icon-btn" id="btn-speed" title="遊戲速度（1 / 2 / 3）">×1</button>
           <button class="btn icon-btn" id="btn-sfx" title="音效開關" aria-label="音效開關"></button>
           <button class="btn icon-btn" id="btn-music" title="音樂開關" aria-label="音樂開關"></button>
@@ -111,16 +121,18 @@
         lv: this.hud.querySelector('#lv'),
         rname: this.hud.querySelector('#rname'),
         stars: this.hud.querySelector('#stars'),
+        clock: this.hud.querySelector('#clock'),
         xpbar: this.hud.querySelector('#xpbar'),
         xplabel: this.hud.querySelector('#xplabel'),
         coins: this.hud.querySelector('#coins'),
         coinpill: this.hud.querySelector('#coinpill'),
+        pause: this.hud.querySelector('#btn-pause'),
         speed: this.hud.querySelector('#btn-speed'),
         sfx: this.hud.querySelector('#btn-sfx'),
         music: this.hud.querySelector('#btn-music'),
         quest: this.hud.querySelector('#quest'),
         warn: this.hud.querySelector('#warn'),
-        pause: this.hud.querySelector('#pause'),
+        pauseBadge: this.hud.querySelector('#pause'),
         bottom: this.hud.querySelector('#bottom'),
         editbar: this.hud.querySelector('#editbar'),
         edithint: this.hud.querySelector('#edithint'),
@@ -138,15 +150,27 @@
 
     refreshHud() {
       const s = this.game.s;
+      const g_ = this.game;
       const need = D.xpForLevel(s.level);
       this.setText(this.el.lv, String(s.level));
       this.setText(this.el.rname, s.name);
       const stars = this.game.stars;
-      const html = `${ic('star', 1)} ${stars} 星　魅力 ${Math.floor(this.game.appeal)}`;
+      const next = D.nextStarAppeal(stars);
+      const glyphs = Array.from({ length: D.MAX_STARS }, (_, i) => (i < stars ? '★' : '<span class="off">★</span>')).join('');
+      const html = `<span class="star-row" title="${D.STAR_TITLES[stars]}">${glyphs}</span> ${D.STAR_TITLES[stars].split('・')[0]}　魅力 ${Math.floor(this.game.appeal)}${next ? ` / ${next}` : ''}`;
       if (this.el.stars.innerHTML !== html) this.el.stars.innerHTML = html;
+      this.updateClock();
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
       this.setText(this.el.speed, '×' + this.game.speed);
+      // 暫停鈕：玩家手動暫停時顯示「繼續」圖示
+      const pIcon = g_.isPausedBy('user') ? 'resume' : 'pause';
+      if (this.el.pause.dataset.i !== pIcon) {
+        this.el.pause.dataset.i = pIcon;
+        this.el.pause.innerHTML = ic(pIcon, 2);
+      }
+      this.el.pause.classList.toggle('on', g_.isPausedBy('user'));
+      this.updatePauseBadge();
       // 音效與音樂各自一顆按鈕：開著是亮的圖示，關掉是斜線
       const sfxIcon = RC.audio.sfxOn ? 'sound' : 'mute';
       if (this.el.sfx.dataset.i !== sfxIcon) {
@@ -207,14 +231,19 @@
     updateWarn() {
       const g = this.game;
       let msg = '';
-      if (!g.stoves.length) msg = '沒有可用的爐灶！到「商店」買一座，並放在有空位站人的地方。';
+      if (g.s.over) msg = '餐廳已經倒閉了。到「設定 → 存檔」重新開始。';
+      else if (g.dayMode && g.isOpen() && !g.anyOnDuty()) msg = '營業時間裡沒有人在班！到「員工 → 排班」調整班表。';
+      else if (!g.sinks.length) msg = '沒有洗碗槽！髒餐具沒地方洗，盤子用完就沒辦法出菜了。到「商店」買一個。';
+      else if (g.cleanPlates() < 1 && g.dirty.size + g.s.sinkDirty > 0) msg = '乾淨的盤子用完了，等員工洗好碗才能繼續出菜（多買盤子或多請人洗碗）。';
+      else if (!g.stoves.length) msg = '沒有可用的爐灶！到「商店」買一座，並放在有空位站人的地方。';
       else if (!g.seats.length) msg = '沒有座位！椅子必須緊鄰桌子，客人才會入座。';
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
       else if (g.queuePeople() >= 4) msg = `門外有 ${g.queuePeople()} 人在候位：增加桌椅（或更大的桌子）可以讓更多人入座。`;
+      else if (g.s.lowDays >= 5) msg = `風評已連續 ${g.s.lowDays} 天跌到谷底，滿 ${D.REPUTATION.loseDays} 天餐廳就要倒閉了！`;
       else if (g.dirty.size >= 3) msg = '桌上的餐具堆積了，雇用更多員工幫忙收桌子吧。';
       else if (g.customers.filter((c) => c.state === 'wait_pay').length >= 3) msg = '好幾位客人等著結帳，掌櫃忙不過來：多雇員工分擔煮菜上菜，讓掌櫃專心收款（也可以買收銀機）。';
       const el = this.el.warn;
-      if (this.edit) {
+      if (this.game.paused) {
         el.hidden = true;
       } else if (msg) {
         this.setText(el, '⚠ ' + msg);
@@ -259,6 +288,10 @@
         this.lvQueue.push(e);
         if (!this.panel || this.panel.name !== 'levelup') this.showLevelUp();
       });
+      g.on('gameover', () => {
+        A.sfx('error');
+        this.showGameOver();
+      });
       g.on('questdone', (q) => {
         A.sfx('quest');
         this.toast(`任務完成！獲得 ${fmt(q.reward)} 金幣`, 'good');
@@ -271,7 +304,7 @@
       if (this.panel && this.panel.name === name && this.panel.overlay) return;
       this.closePanel(true);
       const def = PANELS[name];
-      this.panel = { name, tab: tab || (name === 'shop' ? 'table' : name === 'settings' ? 'main' : null) };
+      this.panel = { name, tab: tab || (name === 'shop' ? 'table' : name === 'settings' ? 'main' : name === 'staff' ? 'crew' : null) };
       const overlay = document.createElement('div');
       overlay.className = 'overlay';
       overlay.innerHTML = `<div class="win pbox"><div class="win-head"><div class="t">${ic(def.icon, 2)}<span>${def.title}</span></div><div class="x" data-act="close">✕</div></div><div class="tabs-slot"></div><div class="win-body"></div></div>`;
@@ -280,11 +313,47 @@
       });
       this.modalRoot.appendChild(overlay);
       this.panel.overlay = overlay;
+      if (name === 'settings') this.game.setPause('settings', true); // 開著設定時遊戲暫停
       this.renderPanel();
+    }
+
+    /** 遊戲時鐘與風評 */
+    updateClock() {
+      const g = this.game;
+      const s = g.s;
+      const hh = String(Math.floor(s.clock / 60)).padStart(2, '0');
+      const mm = String(Math.floor(s.clock % 60)).padStart(2, '0');
+      const open = g.isOpen();
+      const rep = s.reputation;
+      const repCls = rep <= -7 ? 'bad' : rep >= 3 ? 'good' : '';
+      const doom = s.lowDays > 0 ? `　<span class="bad">⚠ 谷底 ${s.lowDays}/${D.REPUTATION.loseDays} 天</span>` : '';
+      const html = `第 ${s.day} 天 ${hh}:${mm}・<span class="${open ? 'good' : 'dim'}">${open ? '營業中' : '休息中'}</span>　風評 <b class="${repCls}">${rep > 0 ? '+' : ''}${rep.toFixed(1)}</b>${doom}`;
+      if (this.el.clock.innerHTML !== html) this.el.clock.innerHTML = html;
+    }
+
+    /** 玩家按暫停／繼續 */
+    togglePause() {
+      const g = this.game;
+      g.setPause('user', !g.isPausedBy('user'));
+      RC.audio.sfx('click');
+      this.refreshHud();
+    }
+
+    /** 暫停提示：玩家手動暫停 > 設定面板 > 裝潢。 */
+    updatePauseBadge() {
+      const g = this.game;
+      const el = this.el.pauseBadge;
+      let t = '';
+      if (g.isPausedBy('user')) t = '⏸ 已暫停　按 ▶ 或空白鍵繼續';
+      else if (g.isPausedBy('settings')) t = '⏸ 設定中：遊戲時間已暫停';
+      else if (g.isPausedBy('edit')) t = '⏸ 裝潢中：遊戲時間已暫停';
+      el.hidden = !t;
+      if (t) this.setText(el, t);
     }
 
     closePanel(silent) {
       if (!this.panel) return;
+      if (this.panel.name === 'settings') this.game.setPause('settings', false); // 關掉設定，遊戲繼續
       if (this.panel.overlay) this.panel.overlay.remove();
       this.panel = null;
       if (!silent) RC.audio.sfx('click');
@@ -292,7 +361,7 @@
 
     renderPanel() {
       const p = this.panel;
-      if (!p || !p.overlay) return;
+      if (!p || !p.overlay || !PANELS[p.name]) return; // 彈出視窗（modal / 升級 / 遊戲終止…）沒有分頁內容要重繪
       const body = p.overlay.querySelector('.win-body');
       const slot = p.overlay.querySelector('.tabs-slot');
       const scroll = body.scrollTop;
@@ -302,7 +371,7 @@
         case 'shop': tabs = SHOP_TABS; html = this.htmlShop(p.tab); break;
         case 'inv': html = this.htmlInventory(); break;
         case 'menu': html = this.htmlMenu(); break;
-        case 'staff': html = this.htmlStaff(); break;
+        case 'staff': tabs = [{ id: 'crew', name: '員工' }, { id: 'sched', name: '排班' }]; html = p.tab === 'sched' ? this.htmlSchedule() : this.htmlStaff(); break;
         case 'quest': html = this.htmlQuests(); break;
         case 'settings': tabs = [{ id: 'main', name: '一般' }, { id: 'stats', name: '統計' }, { id: 'data', name: '存檔' }]; html = this.htmlSettings(p.tab); break;
         default:
@@ -327,7 +396,7 @@
       for (const m of this.game.crew) {
         const q = (k) => p.overlay.querySelector(`[data-${k}="${m.id}"]`);
         const st = q('st');
-        if (st) this.setText(st, STATE_SHORT[m.state] || '');
+        if (st) this.setText(st, m.onDuty ? STATE_SHORT[m.state] || '' : '下班中');
         const bar = q('en');
         if (!bar) continue; // 掌櫃沒有體力條
         bar.style.width = m.rec.energy + '%';
@@ -472,14 +541,16 @@
           return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">店掌櫃・你</span> <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除</div>
-            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
+            <div class="sub">班別 ${shiftText(m.shift)}（每天最多 ${D.DAY.shiftHours} 小時）</div>
+            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子、洗碗。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span> <span class="tag" data-st="${m.id}"></span></div>
-            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}</div>
+            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
+            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　班別 ${shiftText(m.shift)}</div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
+            ${m.manager ? `<button class="btn small" data-act="clear-manager">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
             <button class="btn small danger" data-act="fire" data-id="${m.id}">解雇</button></div></div>`;
       };
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
@@ -495,7 +566,52 @@
         .join('');
       return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="section-title">應徵者　<button class="btn small" data-act="refresh-cands">重新徵才 ${ic('coin', 1)}30</button></div>${cands}
-        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜與收桌子（不能收金幣）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>`;
+        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；Lv.${D.DAY.managerLevel} 以上可任命為值班店長，能代替掌櫃收款）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>`;
+    }
+
+    /** 排班：營業時間、自動排班、每位員工的班別與 24 小時覆蓋 */
+    htmlSchedule() {
+      const g = this.game;
+      const s = g.s;
+      const sc = s.schedule;
+      const cov = g.coverage();
+      const opt = (from, to, sel) => Array.from({ length: to - from + 1 }, (_, i) => from + i).map((h) => `<option value="${h}" ${h === sel ? 'selected' : ''}>${hhmm(h)}</option>`).join('');
+      const bar = (cells) => `<div class="h24">${cells.join('')}</div>`;
+      const covBar = bar(
+        cov.staff.map((n, h) => {
+          const bad = cov.open[h] && (n === 0 || cov.payers[h] === 0);
+          return `<i class="${cov.open[h] ? 'open ' : ''}${bad ? 'bad' : n ? 'ok' : ''}" title="${hhmm(h)}：${n} 人在班，${cov.payers[h]} 人能收款"></i>`;
+        })
+      );
+      const gaps = [];
+      for (let h = 0; h < 24; h++) if (cov.open[h] && cov.staff[h] === 0) gaps.push(h);
+      const noPay = [];
+      for (let h = 0; h < 24; h++) if (cov.open[h] && cov.staff[h] > 0 && cov.payers[h] === 0) noPay.push(h);
+      const fmtH = (a) => a.map((h) => hhmm(h)).join('、');
+      const warns = [];
+      if (gaps.length) warns.push(`營業時間內 ${fmtH(gaps)} 沒有人在班，客人進不了門。`);
+      if (noPay.length) warns.push(`${fmtH(noPay)} 在班的人裡沒有店掌櫃或值班店長，客人只能自助結帳（風評較差）。`);
+      const rows = [...s.staff]
+        .sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0))
+        .map((m) => {
+          const cells = Array.from({ length: 24 }, (_, h) => `<i class="${(((h - m.shift) % 24) + 24) % 24 < D.DAY.shiftHours ? 'ok' : ''} ${cov.open[h] ? 'open' : ''}"></i>`);
+          return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true, m.boss)}" width="30" height="54" alt=""></div>
+            <div class="grow"><div class="nm">${esc(m.name)} ${m.boss ? '<span class="tag gold">店掌櫃</span>' : m.manager ? '<span class="tag blue">值班店長</span>' : `<span class="tag gold">Lv.${m.level}</span>`}</div>
+            <div class="sub">上班 <select data-sel="shift" data-id="${m.id}" aria-label="${esc(m.name)}的上班時間">${opt(0, 23, m.shift)}</select> 起連續 ${D.DAY.shiftHours} 小時（到 ${hhmm(m.shift + D.DAY.shiftHours)}）</div>
+            ${bar(cells)}</div></div>`;
+        })
+        .join('');
+      return `<div class="section-title" style="margin-top:0">營業時間</div>
+        <div class="sched-row">開店 <select data-sel="open" aria-label="開店時間">${opt(0, 23, sc.open)}</select> 打烊 <select data-sel="close" aria-label="打烊時間">${opt(1, 24, sc.close)}</select>
+          <span class="sub">共 ${sc.close - sc.open} 小時；其餘時間是休息時間，客人不會上門</span></div>
+        <div class="section-title">排班</div>
+        <div class="sched-row"><button class="btn small ${sc.auto ? 'primary' : ''}" data-act="auto-sched">自動排班：${sc.auto ? '開' : '關'}</button>
+          <span class="sub">${sc.auto ? '開啟時，班表會跟著營業時間與人員自動調整' : '手動排班：自己決定每個人幾點上班'}</span></div>
+        <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天最多上班 ${D.DAY.shiftHours} 小時，時間到就會下班。離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
+        <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
+        <div class="h24-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+        ${warns.map((w) => `<div class="warn-line">⚠ ${w}</div>`).join('')}
+        <div class="section-title">班表</div>${rows}`;
     }
 
     htmlQuests() {
@@ -525,12 +641,15 @@
         const mins = Math.floor(t.playTime / 60);
         return `<div class="kv">
           <span>餐廳等級</span><b>Lv.${s.level}</b>
-          <span>餐廳星級</span><b>${g.stars} 星</b>
+          <span>餐廳星級（最高三星）</span><b>${D.STAR_TITLES[g.stars]}</b>
           <span>服務客人</span><b>${fmt(t.served)} 位</b>
           <span>氣走的客人</span><b>${fmt(t.angry)} 位</b>
           <span>沒等到位子離開</span><b>${fmt(t.walkouts || 0)} 組</b>
           <span>累計賺取</span><b>${fmt(t.earned)} 金幣</b>
           <span>累計小費</span><b>${fmt(t.tips)} 金幣</b>
+          <span>遊戲版次</span><b>${D.GAME_VERSION.current}</b>
+          <span>營業天數</span><b>第 ${s.day} 天</b>
+          <span>餐廳風評</span><b>${s.reputation > 0 ? '+' : ''}${s.reputation.toFixed(1)}（${D.REPUTATION.min} ~ +${D.REPUTATION.max}）</b>
           <span>員工人數</span><b>${s.staff.length} 位</b>
           <span>座位數</span><b>${g.seats.length}</b>
           <span>遊玩時間</span><b>${Math.floor(mins / 60)} 小時 ${mins % 60} 分</b></div>`;
@@ -580,11 +699,37 @@
         <ul><li>客人有單人也有成群來，<b>不同組不併桌</b>；沒空桌就在門外候位</li>
         <li>員工與掌櫃會點餐、煮菜、上菜，客人走後桌上會留下餐具，要收拾完才能再坐</li>
         <li>客人吃完頭上會出現金幣，<b>店掌櫃會走到他面前電子支付收款</b>（只有他能收）；收完款客人才會離開、座位才會空出來</li>
+        <li>餐廳有<b>營業時間與休息時間</b>；每位員工每天最多上班 8 小時，可以到「員工 → 排班」自己排或交給自動排班</li>
+        <li>用過的餐具要先送到<b>洗碗槽</b>洗乾淨才有盤子能用；風評連續 15 天跌到谷底，餐廳就會倒閉</li>
         <li>到「商店」買桌椅、爐灶與裝飾，椅子要<b>緊鄰桌子</b></li>
         <li>到「菜單」學新菜色，「員工」雇用更多幫手；進度會自動存檔，離開期間也會替你賺錢</li></ul>
         <div class="section-title" style="margin-top:6px">幫你的店掌櫃取個名字</div>
         <input type="text" id="bn0" maxlength="8" value="${esc(boss ? boss.name : '')}">
         <div style="text-align:center;margin-top:6px"><button class="btn primary" data-act="welcome-ok">開始營業！</button></div></div>`);
+    }
+
+    /** 存檔版次與目前遊戲差太多：只能重新開局 */
+    showVersionBlocked(chk) {
+      const cur = D.GAME_VERSION.current;
+      const old = chk && chk.reason === 'new';
+      this._skipSave = true;
+      this.modal(`<div class="lvup"><h2 style="font-size:20px">存檔版次不相容</h2>
+        <div>這份存檔是遊戲<b>版次 ${chk ? esc(chk.version) : '?'}</b>，目前遊戲是<b>版次 ${cur}</b>。${old ? '存檔比目前的遊戲還新，請重新整理頁面載入最新版。' : '版次差太多，沒辦法安全地轉換，只能請你重新開局。'}</div>
+        <div class="sub">舊存檔已另外備份在瀏覽器裡，不會被覆蓋。</div>
+        <div style="margin-top:8px"><button class="btn primary" data-act="version-new">開始新遊戲</button></div></div>`);
+      this.panel.name = 'versionblock';
+    }
+
+    showGameOver() {
+      const o = this.game.s.over;
+      if (!o) return;
+      const why = o.reason === 'reputation' ? `餐廳的風評連續 ${D.REPUTATION.loseDays} 天跌到谷底（${D.REPUTATION.min}），客人再也不願意上門了。` : '餐廳無法再經營下去了。';
+      this.modal(`<div class="lvup"><h2 style="font-size:22px">餐廳倒閉了…</h2>
+        <div>${why}</div>
+        <div class="list"><div>✦ 撐了 <b>${o.day}</b> 天</div><div>✦ 服務過 <b>${fmt(o.served)}</b> 位客人</div><div>✦ 累計賺了 ${ic('coin', 1)} <b>${fmt(o.earned)}</b></div><div>✦ 餐廳等級 <b>Lv.${o.level}</b></div></div>
+        <div class="sub">下次記得多請人手、排好班表、顧好餐點與環境，讓客人滿意。</div>
+        <div style="margin-top:8px"><button class="btn primary" data-act="restart">重新開始</button><button class="btn" data-act="gameover-close">回去看看</button></div></div>`);
+      this.panel.name = 'gameover';
     }
 
     showBossRename(reopenStaff) {
@@ -605,6 +750,7 @@
       const mins = Math.round(r.away / 60);
       const dur = mins >= 60 ? `${Math.floor(mins / 60)} 小時 ${mins % 60} 分` : `${mins} 分鐘`;
       const lines = [];
+      if (r.days > 0) lines.push(`店裡度過了 <b>${r.days}</b> 天，風評現在是 <b>${r.reputation > 0 ? '+' : ''}${r.reputation.toFixed(1)}</b>`);
       lines.push(`服務了 <b>${fmt(r.served)}</b> 位客人`);
       if (r.earned > 0) lines.push(`店掌櫃替客人收了 ${ic('coin', 1)} <b>${fmt(r.earned)}</b>`);
       if (r.levelTo > r.levelFrom) lines.push(`餐廳升到 <b>Lv.${r.levelTo}</b>，獲得升級獎勵 ${ic('coin', 1)} ${fmt(r.levelReward)}`);
@@ -708,6 +854,9 @@
           if (v) res(g.renameBoss(v.value), 'click');
           break;
         }
+        case 'auto-sched': res(g.setAutoSchedule(!g.s.schedule.auto), 'click'); break;
+        case 'set-manager': res(g.assignManager(+id), 'buy'); break;
+        case 'clear-manager': res(g.clearManager(), 'click'); break;
         case 'boss-rename': this.showBossRename(true); A.sfx('click'); break;
         case 'boss-save': {
           const v = document.getElementById('bn2');
@@ -753,10 +902,22 @@
             });
           } catch (e) {
             A.sfx('error');
-            this.toast('存檔格式不正確', 'bad');
+            this.toast(e && e.code === 'version' ? `這份存檔是版次 ${e.check.version}，目前遊戲是版次 ${D.GAME_VERSION.current}，${e.check.reason === 'new' ? '存檔比較新，請更新遊戲' : '版次差太多，無法匯入'}` : '存檔格式不正確', 'bad');
           }
           break;
         }
+        case 'version-new':
+          this._skipSave = false;
+          this.closePanel(true);
+          this.showWelcome();
+          A.sfx('buy');
+          break;
+        case 'restart':
+          RC.state.clear();
+          this._skipSave = true;
+          location.reload();
+          break;
+        case 'gameover-close': this.closePanel(true); break;
         case 'reset':
           this.confirm('確定要清除所有進度重新開始嗎？此動作無法復原。', () => {
             RC.state.clear();
@@ -827,9 +988,7 @@
       this.edit = on;
       this.view.edit = on;
       // 裝潢時遊戲時間暫停：客人、員工、計時全部凍結，慢慢擺不怕客人氣走
-      this.game.paused = on;
-      this.el.pause.hidden = !on;
-      if (on) this.el.warn.hidden = true;
+      this.game.setPause('edit', on);
       if (!on) {
         this.cancelPlacing();
         this.deselect();
@@ -841,6 +1000,7 @@
       this.el.bottom.hidden = on;
       this.el.editbar.hidden = !on;
       this.updateEditHint();
+      this.updatePauseBadge();
     }
 
     updateEditHint() {
@@ -1011,6 +1171,8 @@
         RC.audio.unlock();
       }, { capture: true });
       document.body.addEventListener('click', (e) => {
+        // 按完按鈕就放掉焦點，否則空白鍵會被按鈕本身吃掉（變成再按一次同一顆按鈕）
+        if (document.activeElement && document.activeElement.tagName === 'BUTTON') document.activeElement.blur();
         const el = e.target.closest('[data-act]');
         if (el && !el.disabled) {
           if (el.classList.contains('off')) return;
@@ -1031,6 +1193,7 @@
         if (!this.pointer) this.hover = { x: -99, y: -99 };
         this.updateGhost();
       });
+      this.el.pause.addEventListener('click', () => this.togglePause());
       this.el.speed.addEventListener('click', () => {
         this.setSpeed(this.game.speed % 3 + 1);
         RC.audio.sfx('click');
@@ -1066,6 +1229,19 @@
         this.persistAudio();
       });
       document.body.addEventListener('change', (e) => {
+        const sel = e.target.closest && e.target.closest('[data-sel]');
+        if (sel && this.panel && this.panel.name === 'staff') {
+          const g = this.game;
+          const v = +sel.value;
+          let r;
+          if (sel.dataset.sel === 'shift') r = g.setShift(+sel.dataset.id, v);
+          else if (sel.dataset.sel === 'open') r = g.setBusinessHours(v, Math.max(g.s.schedule.close, v + 1));
+          else r = g.setBusinessHours(g.s.schedule.open, v);
+          if (!r.ok) this.toast(r.msg, 'bad');
+          RC.audio.sfx(r.ok ? 'click' : 'error');
+          this.panel.lastHtml = null;
+          this.renderPanel();
+        }
         if (e.target.closest && e.target.closest('[data-vol=sfx]')) RC.audio.sfx('coin'); // 放開滑桿時試聽一下
       });
       window.addEventListener('keydown', (e) => this.onKey(e));
@@ -1084,7 +1260,10 @@
         else if (this.edit) this.setEdit(false);
         else if (this.actor) this.act('actor-close');
       } else if (this.panel) return;
-      else if (k === 'e' || k === 'E') this.setEdit(!this.edit);
+      else if (k === ' ' || k === 'Spacebar') {
+        e.preventDefault();
+        this.togglePause();
+      } else if (k === 'e' || k === 'E') this.setEdit(!this.edit);
       else if (k === 'r' || k === 'R') this.rotateSelected();
       else if ((k === 'Delete' || k === 'Backspace') && this.edit) this.storeSelected();
       else if (k === '1' || k === '2' || k === '3') this.setSpeed(+k);

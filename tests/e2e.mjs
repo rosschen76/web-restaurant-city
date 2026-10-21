@@ -49,7 +49,7 @@ async function scenario(name, fn, opts = {}) {
     await page.goto(url);
     await page.waitForSelector('#game');
     await fn(page);
-    assert.deepEqual(errors, [], '不應有 console/頁面錯誤');
+    assert.deepEqual(errors, [], '不應有 console/頁面錯誤 ' + JSON.stringify(errors));
     assert.deepEqual(requests404, [], '不應有 404 資源');
     console.log('ok   -', name);
   } catch (e) {
@@ -70,6 +70,20 @@ await scenario('子路徑載入、歡迎視窗、開始營業', async (page) => 
   await page.click('[data-act=welcome-ok]');
   assert.equal(await page.locator('[data-act=welcome-ok]').count(), 0);
   assert.ok((await page.title()).includes('像素餐廳城'));
+});
+
+await scenario('餐廳星級最高三星，HUD 以三顆星顯示並隨魅力變化', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const hud = () => page.locator('#stars').innerText();
+  assert.ok((await hud()).includes('尚未評星'), await hud());
+  assert.equal(await page.locator('#stars .star-row').innerText().then((t) => t.length), 3, '永遠只有三顆星的位置');
+  for (const [appeal, word] of [[40, '一星'], [160, '二星'], [400, '三星'], [99999, '三星']]) {
+    await G(page, (a) => { const g = window.__game.game; g.appeal = a; g.stars = window.RC.data.starsForAppeal(a); g.changed(); }, appeal);
+    await page.waitForTimeout(80);
+    const t = await hud();
+    assert.ok(t.includes(word), `魅力 ${appeal} 應顯示「${word}」：${t}`);
+    assert.ok(!/[4-9]\s*星|10\s*星/.test(t));
+  }
 });
 
 await scenario('歡迎視窗可為店掌櫃命名；掌櫃不能被開除', async (page) => {
@@ -197,6 +211,53 @@ await scenario('音效與音樂是兩個獨立的開關，各自有按鈕、音�
   assert.deepEqual(after, { sfxOn: true, musicOn: false, musicVol: 0.3 });
 });
 
+await scenario('暫停按鈕與空白鍵：按下暫停時間凍結，再按繼續；開著設定時自動暫停，關掉後恢復', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await page.waitForTimeout(300);
+  const snap = () => G(page, () => { const g = window.__game.game; return JSON.stringify([g.s.stats.playTime, g.s.clock, g.customers.map((c) => [c.x, c.y, c.state]), g.crew.map((m) => [m.x, m.y, m.state])]); });
+  assert.equal(await page.locator('#btn-pause').isVisible(), true, 'HUD 有暫停按鈕');
+  assert.equal(await page.locator('#pause').isVisible(), false);
+
+  // 1) 按鈕暫停
+  await page.click('#btn-pause');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true);
+  assert.equal(await page.locator('#pause').isVisible(), true, '要提示已暫停');
+  assert.ok((await page.locator('#pause').innerText()).includes('已暫停'));
+  const a = await snap();
+  await page.waitForTimeout(1200);
+  assert.equal(await snap(), a, '暫停期間任何東西都不動');
+  await page.click('#btn-pause');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+  await page.waitForTimeout(500);
+  assert.notEqual(await snap(), a, '繼續後時間前進');
+
+  // 2) 空白鍵（按完按鈕後仍然有效）
+  await page.keyboard.press('Space');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true);
+  await page.keyboard.press('Space');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+
+  // 3) 設定面板：開著就暫停，關掉就繼續
+  await page.click('.bottom-bar [data-act=open-settings]');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('settings')), true);
+  assert.ok((await page.locator('#pause').innerText()).includes('設定'));
+  const b = await snap();
+  await page.waitForTimeout(1000);
+  assert.equal(await snap(), b, '設定開著時遊戲凍結');
+  await page.keyboard.press('Escape');
+  assert.equal(await G(page, () => window.__game.game.paused), false);
+  await page.waitForTimeout(500);
+  assert.notEqual(await snap(), b);
+
+  // 4) 玩家自己按的暫停，不會被「關掉設定」誤解除
+  await page.click('#btn-pause');
+  await page.click('.bottom-bar [data-act=open-settings]');
+  await page.keyboard.press('Escape');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('user')), true, '手動暫停仍然保留');
+  assert.equal(await G(page, () => window.__game.game.isPausedBy('settings')), false);
+  await page.click('#btn-pause');
+});
+
 await scenario('進入裝潢模式時遊戲時間暫停，離開後恢復', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await page.waitForTimeout(500);
@@ -279,13 +340,84 @@ await scenario('以 3 倍速連續模擬 20 分鐘不出錯，等級成長', asy
   await page.click('[data-act=welcome-ok]');
   await G(page, () => {
     const { game } = window.__game;
+    // 有日夜與排班之後，只靠店掌櫃一人撐不住不斷增加的座位：先請兩位員工
+    game.s.coins = 1e5; game.s.level = 12; game.hire(0); game.hire(0); game.setAutoSchedule(true);
     for (let i = 0; i < 12000; i++) {
       game.update(0.1);
-      if (i % 100 === 0) { game.claimQuest(); game.buyFurniture('chair_wood'); }
+      if (i % 100 === 0) { game.claimQuest(); game.s.coins = Math.max(game.s.coins, 1e4); game.buyFurniture('chair_wood'); }
     }
   });
   await page.waitForTimeout(300);
   assert.ok((await G(page, () => window.__game.game.s.stats.served)) > 50);
+});
+
+await scenario('存檔版次比目前新：不讀取，顯示只能重新開局，舊存檔備份且不被覆蓋；按下「開始新遊戲」才進入新局', async (page) => {
+  const text = await G(page, () => {
+    const RC = window.RC;
+    const raw = JSON.parse(RC.codec.decode(RC.state.serialize(RC.state.newGame())));
+    raw.v = RC.data.GAME_VERSION.current + 3;
+    raw.coins = 424242;
+    const t = RC.codec.encode(JSON.stringify(raw));
+    window.__game.ui._skipSave = true;
+    localStorage.setItem(RC.state.SAVE_KEY, t);
+    return t;
+  });
+  const ctx = page.context();
+  await page.close();
+  const p2 = await ctx.newPage();
+  const errs = [];
+  p2.on('pageerror', (e) => errs.push(e.message));
+  await p2.goto(url);
+  await p2.waitForSelector('#game');
+  const txt = await p2.locator('.win').innerText();
+  assert.ok(txt.includes('版次不相容') && txt.includes('版次 ' + (await p2.evaluate(() => window.RC.data.GAME_VERSION.current + 3))), txt);
+  assert.ok((await p2.evaluate(() => window.__game.game.s.coins)) !== 424242, '不應載入不相容的存檔');
+  await p2.waitForTimeout(300);
+  assert.equal(await p2.evaluate(() => localStorage.getItem(window.RC.state.SAVE_KEY + '/incompatible-backup')), text, '舊存檔要備份');
+  assert.equal(await p2.evaluate(() => localStorage.getItem(window.RC.state.SAVE_KEY)), text, '在玩家決定前不能蓋掉原存檔');
+  await p2.click('[data-act=version-new]');
+  assert.ok((await p2.locator('.win').innerText()).includes('歡迎來到'));
+  assert.deepEqual(errs, []);
+  await p2.close();
+  throw Object.assign(new Error('__done__'), { done: true });
+});
+
+await scenario('排班：營業時間、手動排班（每班 8 小時）、自動排班、值班店長；HUD 顯示天數與風評', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const hud = await page.locator('#clock').innerText();
+  assert.ok(/第 1 天 \d\d:\d\d/.test(hud) && hud.includes('風評'), hud);
+  await G(page, () => { const g = window.__game.game; g.s.coins = 1e5; g.s.level = 12; g.hire(0); g.s.staff[1].level = 10; });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  assert.ok(await page.locator('[data-act=set-manager]').count() >= 1, 'Lv.10 以上的員工可任命值班店長');
+  await page.click('[data-act=set-manager]');
+  assert.equal(await G(page, () => window.__game.game.s.staff.filter((m) => m.manager).length), 1);
+  await page.click('[data-tab=sched]');
+  assert.ok((await page.locator('.win-body').innerText()).includes('每天最多上班 8 小時'));
+  await page.selectOption('[data-sel=open]', '10');
+  await page.selectOption('[data-sel=close]', '20');
+  assert.deepEqual(await G(page, () => { const s = window.__game.game.s.schedule; return [s.open, s.close]; }), [10, 20]);
+  await page.click('[data-act=auto-sched]'); // 關掉自動排班
+  assert.equal(await G(page, () => window.__game.game.s.schedule.auto), false);
+  await page.selectOption('[data-sel=shift] >> nth=1', '14');
+  assert.equal(await G(page, () => window.__game.game.s.staff[1].shift), 14);
+  const bars = await G(page, () => window.__game.game.coverage().staff.reduce((a, b) => a + b, 0));
+  assert.equal(bars, 2 * 8, '兩個人、每人 8 小時');
+  const w = await G(page, () => { const b = document.querySelector('.win-body'); return b.scrollWidth - b.clientWidth; });
+  assert.ok(w <= 0, '排班頁不應出現水平捲軸');
+});
+
+await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.reputation = -10; g.s.lowDays = 14; g.s.clock = 1439.5; });
+  await page.waitForSelector('[data-act=restart]', { timeout: 8000 });
+  assert.ok((await page.locator('.win').innerText()).includes('倒閉'));
+  assert.ok(await G(page, () => !!window.__game.game.s.over));
+  const before = await G(page, () => window.__game.game.s.stats.playTime);
+  await page.waitForTimeout(500);
+  assert.equal(await G(page, () => window.__game.game.s.stats.playTime), before, '遊戲終止後時間不再前進');
+  await page.click('[data-act=restart]');
+  await page.waitForSelector('[data-act=welcome-ok]');
+  assert.equal(await G(page, () => !!window.__game.game.s.over), false);
 });
 
 await scenario('手機尺寸（觸控）可操作並維持版面', async (page) => {

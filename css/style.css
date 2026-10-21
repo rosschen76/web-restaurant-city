@@ -209,3 +209,33 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
   .hud-tr { flex-wrap: wrap; justify-content: flex-end; width: 150px; row-gap: 2px; }
   .hud-tr .coin-pill { flex: 1 0 100%; }
 }
+
+/* 餐廳星級（最高三星） */
+.star-row { letter-spacing: 1px; }
+.star-row .off { color: #cdb98d; }
+
+.icon-btn.on { background: var(--gold); }
+
+/* 時鐘與風評、排班 */
+.clockline { font-size: 12px; margin: 1px 0 2px; line-height: 1.3; }
+.clockline .good, .warn-line.ok { color: var(--good-d); }
+.clockline .bad { color: var(--bad-d); }
+.clockline .dim { color: #7a6a5a; }
+.tag.blue { background: var(--blue-d); }
+select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: var(--ink); box-shadow: 0 -2px 0 var(--ink), 0 2px 0 var(--ink), -2px 0 0 var(--ink), 2px 0 0 var(--ink); margin: 2px 3px; }
+.sched-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.h24 { display: grid; grid-template-columns: repeat(24, 1fr); gap: 1px; margin: 4px 0 2px; max-width: 100%; }
+.h24 i { display: block; height: 12px; background: #e9dcc0; }
+.h24 i.open { background: #d9c79c; border-top: 3px solid var(--blue); }
+.h24 i.ok { background: var(--good); }
+.h24 i.bad { background: var(--bad); }
+.h24-labels { display: flex; justify-content: space-between; font-size: 10px; color: #7a6a5a; }
+.warn-line { background: #ffe9a8; padding: 4px 8px; margin: 4px 0; font-size: 12px; }
+
+.hud-tl { max-width: 100%; box-sizing: border-box; }
+@media (max-width: 560px) {
+  .hud-left { max-width: calc(100vw - 184px - var(--safe-l) - var(--safe-r)); }
+  .stars { flex-wrap: wrap; row-gap: 0; }
+  .clockline { font-size: 11px; }
+  /* 提示條放到底部列上方，不要蓋住左上角的資訊卡 */
+  .warn-banner { top: auto; bottom: calc(92px + var(--safe-b)); } }

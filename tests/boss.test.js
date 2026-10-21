@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const RC = require('./load.js');
 
-const mk = (seed = 1) => new RC.Game(RC.state.newGame(RC.util.makeRng(seed)), { seed });
+const mk = (seed = 1) => new RC.Game(RC.state.newGame(RC.util.makeRng(seed)), { seed, dayMode: false });
 const run = (g, sec, dt = 0.1) => {
   for (let t = 0; t < sec; t += dt) g.update(dt);
 };
@@ -166,7 +166,7 @@ function mkManyTables(seed = 5) {
     add('table_wood', 3, 2 + i);
     add('chair_stool', 2, 2 + i);
   }
-  return new RC.Game(s, { seed });
+  return new RC.Game(s, { seed, dayMode: false });
 }
 
 test('小費隨等待時間遞減，等滿 30 秒沒有小費', () => {

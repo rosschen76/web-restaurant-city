@@ -1,0 +1,86 @@
+name: 回報問題
+description: 遊戲出錯、卡住、畫面或聲音怪怪的，或是操作起來不如預期
+title: "[問題] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        謝謝你幫忙回報！資訊越完整，越容易重現並修好。不確定的欄位可以留空。
+  - type: textarea
+    id: what
+    attributes:
+      label: 發生了什麼事？
+      description: 用一兩句話描述你看到的問題。
+      placeholder: 例如：客人吃完頭上有金幣，但掌櫃一直沒有過去結帳
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 怎麼讓它發生？
+      description: 你做了哪些操作？愈接近「照著做就能重現」愈好。
+      placeholder: |
+        1. 進入遊戲後買了一張長條餐桌
+        2. 擺放後離開裝潢模式
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你原本預期會怎樣？
+    validations:
+      required: false
+  - type: dropdown
+    id: device
+    attributes:
+      label: 你用什麼裝置玩？
+      options:
+        - 電腦
+        - 手機
+        - 平板
+    validations:
+      required: true
+  - type: dropdown
+    id: browser
+    attributes:
+      label: 瀏覽器
+      options:
+        - Chrome
+        - Safari
+        - Firefox
+        - Edge
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 瀏覽器版本或手機型號（選填）
+      placeholder: 例如：Chrome 130、iPhone 15 / iOS 18
+  - type: textarea
+    id: stats
+    attributes:
+      label: 遊戲狀態（選填，建議附上）
+      description: 開啟遊戲「設定 → 統計」分頁，把內容抄在這裡；也可以只寫等級與星級（左上角）。
+      placeholder: |
+        遊戲版次 2
+        餐廳等級 Lv.7
+        餐廳星級 3 星
+        服務客人 214 位
+        員工人數 3 位
+        座位數 9
+  - type: textarea
+    id: save
+    attributes:
+      label: 存檔文字（選填，最能幫助重現）
+      description: |
+        開啟「設定 → 存檔」，複製「匯出」的整段文字貼在這裡，我就能載入你的存檔來重現。
+        存檔只包含遊戲進度，沒有任何個人資料。
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: 截圖或其他補充（選填）
+      description: 可以直接把圖片拖進來。如果遇到紅色的錯誤提示，也請附上。

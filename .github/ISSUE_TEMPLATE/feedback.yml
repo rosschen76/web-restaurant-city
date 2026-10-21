@@ -1,0 +1,37 @@
+name: 遊戲建議或平衡回饋
+description: 太簡單、太難、太慢、太卡關，或是想要的新功能與點子
+title: "[建議] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        遊戲節奏（金幣、升級、客人多寡）目前只用程式模擬調整過，你的實際遊玩感受很重要！
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 這是哪一類回饋？
+      options:
+        - 節奏太慢／太難（賺錢、升級、客人不夠）
+        - 節奏太快／太簡單
+        - 玩法或介面不好懂
+        - 想要新功能或新內容（菜色、家具、角色⋯）
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: detail
+    attributes:
+      label: 你的想法
+      description: 越具體越好，例如「玩到幾級、玩了多久、哪個地方讓你覺得無聊或卡住」。
+    validations:
+      required: true
+  - type: input
+    id: progress
+    attributes:
+      label: 你目前的進度（選填）
+      placeholder: 例如：Lv.9、二星、5 位員工、玩了約 2 小時
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你希望變成怎樣？（選填）

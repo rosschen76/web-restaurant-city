@@ -1,4 +1,4 @@
-/* 像素美術（場景）：地板、牆壁、地毯、全部家具。皆於載入時程式化繪製成小圖。 */
+/* 像素美術（場景）：地板、牆壁、全部家具。皆於載入時程式化繪製成小圖。 */
 (function (G) {
   'use strict';
   const RC = (G.RC = G.RC || {});
@@ -10,7 +10,7 @@
   const SLAB = 6;
   const frac = (v) => v - Math.floor(v);
 
-  /* ───────── 地板 / 地毯：逐像素著色器 ───────── */
+  /* ───────── 地板：逐像素著色器 ───────── */
 
   /** 32×16 菱形；fn(u,v,x,y) 回傳顏色或 null */
   function bakeTile(fn) {
@@ -70,27 +70,6 @@
       let col = alt ? '#e7e4ea' : '#efecf1';
       if (Math.abs(vein) < 0.12) col = '#cfccd8';
       return col;
-    },
-  };
-
-  const RUGS = {
-    rug_red: (u, v) => {
-      if (u < 0.1 || u > 0.9 || v < 0.1 || v > 0.9) return '#e0b44a';
-      if (u < 0.18 || u > 0.82 || v < 0.18 || v > 0.82) return '#8f2420';
-      const d = Math.abs(u - 0.5) + Math.abs(v - 0.5);
-      return d < 0.2 ? '#e0b44a' : d < 0.28 ? '#b4322b' : '#c9423a';
-    },
-    rug_tatami: (u, v, x, y) => {
-      if (u < 0.08 || u > 0.92 || v < 0.08 || v > 0.92) return '#3f4d27';
-      if (Math.abs(u - 0.5) < 0.04) return '#6c7a46';
-      return (y & 1 ? '#b9c47a' : '#aab86a');
-    },
-    rug_blue: (u, v) => {
-      if (u < 0.08 || u > 0.92 || v < 0.08 || v > 0.92) return '#1f4f9a';
-      const d = Math.abs(u - 0.5) + Math.abs(v - 0.5);
-      if (d < 0.14) return '#2b63bd';
-      if (d < 0.3 && d > 0.22) return '#2b63bd';
-      return '#eef3fb';
     },
   };
 
@@ -382,6 +361,19 @@
     for (let i = 0; i < 3; i++) b.dot(0.34 + i * 0.12, 0.7, 14, '#8a7a5a', 2, 1);
     b.disc(0.82, 0.8, 9, 3, 1, '#e8b83a');
   } };
+  DRAW.sink = { h: 30, fn(b) {
+    // 不鏽鋼水槽：櫃體 + 凹陷的水盆 + 水龍頭
+    b.box(0.06, 0.06, 0.94, 0.94, 0, 10, '#b4bec6', { top: '#d9e0e5', left: '#9aa6af', right: '#7c8993' });
+    b.flat(0.16, 0.2, 0.84, 0.86, 10, '#5d6a74');
+    b.flat(0.22, 0.28, 0.78, 0.8, 10, '#8ed0ee');
+    b.flat(0.3, 0.36, 0.5, 0.42, 10, '#c9ecf8');
+    b.wallU(0.12, 0.88, 0.94, 2, 8, '#8c98a1');
+    b.dot(0.3, 0.94, 5, '#e8b83a', 2, 2);
+    b.dot(0.7, 0.94, 5, '#e8b83a', 2, 2);
+    b.box(0.42, 0.1, 0.52, 0.2, 10, 21, '#d3dadf');
+    b.box(0.42, 0.1, 0.7, 0.2, 18, 21, '#d3dadf');
+    b.box(0.64, 0.12, 0.7, 0.2, 14, 18, '#aab4bb');
+  } };
   DRAW.fridge = { h: 42, fn(b) {
     b.box(0.1, 0.1, 0.9, 0.9, 0, 34, '#e6edf1', { left: '#cdd8de', right: '#a9b7c0', top: '#f4f8fa' });
     b.wallU(0.1, 0.9, 0.9, 20, 21, '#8fa0aa');
@@ -522,9 +514,6 @@
     b.dot(0.4, 0.5, 22, '#55555f', 6, 1);
   } };
 
-  /* 地毯由 RUGS 烘焙，這裡只登記 */
-  for (const id of Object.keys(RUGS)) DRAW[id] = { h: 0, rug: true, fn() {} };
-
   /* ───────── 對外介面 ───────── */
 
   const furnCache = new Map();
@@ -546,15 +535,10 @@
     const c = canvas((fp.w + fp.h) * 16 + pad * 2, (fp.w + fp.h) * 8 + H + pad * 2);
     const ax = fp.h * 16 + pad;
     const ay = H + pad;
-    if (dr.rug) {
-      const t = rugTile(id);
-      ctx(c).drawImage(t, ax - 16, ay);
-    } else {
-      const swap = !!(rr & 1) && !isChair;
-      const b = brush(ctx(c), ax, ay, swap);
-      dr.fn(b, { rot: rr, face: rr, part: part || 'all', fw: fp.w, fh: fp.h });
-      outline(c);
-    }
+    const swap = !!(rr & 1) && !isChair;
+    const b = brush(ctx(c), ax, ay, swap);
+    dr.fn(b, { rot: rr, face: rr, part: part || 'all', fw: fp.w, fh: fp.h });
+    outline(c);
     e = { c, ax, ay };
     furnCache.set(key, e);
     return e;
@@ -564,12 +548,6 @@
     const key = 'f:' + id + ':' + (alt ? 1 : 0);
     let t = tileCache.get(key);
     if (!t) tileCache.set(key, (t = bakeTile(FLOORS[id](!!alt))));
-    return t;
-  }
-  function rugTile(id) {
-    const key = 'r:' + id;
-    let t = tileCache.get(key);
-    if (!t) tileCache.set(key, (t = bakeTile(RUGS[id])));
     return t;
   }
   const wallSegCache = new Map();
@@ -589,5 +567,5 @@
     return r;
   }
 
-  RC.artWorld = { WALL_H, SLAB, furniture, floorTile, rugTile, wallSeg, roomLayer, DRAW };
+  RC.artWorld = { WALL_H, SLAB, furniture, floorTile, wallSeg, roomLayer, DRAW };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
