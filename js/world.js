@@ -277,23 +277,24 @@
     return stoves;
   }
 
-  /** 找出所有洗碗槽與可站的位置。 */
-  function findSinks(g) {
+  /** 找出某種功能家具（洗碗槽 sink、出餐台 pass、餐具回收台 return）與可站的位置；cap 是它的容量。 */
+  function findByFn(g, fn) {
     const sinks = [];
     const F = RC.data.furniture;
     for (const it of g.items) {
       const def = F[it.id];
-      if (!def || def.fn !== 'sink') continue;
+      if (!def || def.fn !== fn) continue;
       const access = [];
       for (let d = 0; d < 4; d++) {
         const nx = it.x + DX[d];
         const ny = it.y + DY[d];
         if (walkable(g, nx, ny) && g.reach[ny * g.w + nx]) access.push({ x: nx, y: ny });
       }
-      if (access.length) sinks.push({ uid: it.uid, id: it.id, x: it.x, y: it.y, access });
+      if (access.length) sinks.push({ uid: it.uid, id: it.id, x: it.x, y: it.y, access, cap: def.cap || 0 });
     }
     return sinks;
   }
+  const findSinks = (g) => findByFn(g, 'sink');
 
   /** 距離 (x,y) 最近的可行走格（BFS），用於把被家具壓到的人移開。 */
   function nearestWalkable(g, x, y) {
@@ -317,5 +318,5 @@
     return { x: g.door.x, y: g.door.y };
   }
 
-  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, hasFront, isOriented, suggestRot, findStoves, findSinks, nearestWalkable };
+  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, hasFront, isOriented, suggestRot, findStoves, findSinks, findByFn, nearestWalkable };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

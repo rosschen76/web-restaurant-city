@@ -356,6 +356,24 @@
         }
       }
 
+      // 出餐台上等著上桌的餐點、回收台上堆著的髒餐具
+      if (game.passes.length) {
+        const ready = game.customers.filter((c) => c.onCounter);
+        ready.forEach((c, i) => {
+          const pc = game.passes[i % game.passes.length];
+          const k = Math.floor(i / game.passes.length);
+          if (k > 2) return;
+          const p = this.proj(pc.x + 0.5, pc.y + 0.5);
+          list.push({ k: pc.x + pc.y + 1.06 + k * 0.001, f: () => g.drawImage(AP.dish(c.dish), Math.round(p[0] - 6 + (k - 1) * 5), Math.round(p[1] - 26 - k)) });
+        });
+      }
+      if (s.returnDirty > 0) {
+        for (const st of game.returns) {
+          const p = this.proj(st.x + 0.5, st.y + 0.5);
+          list.push({ k: st.x + st.y + 1.05, f: () => g.drawImage(AP.fx('plates'), Math.round(p[0] - 4), Math.round(p[1] - 24)) });
+        }
+      }
+
       // 桌上的餐點與金幣
       for (const c of game.customers) {
         if (c.state !== 'eat') continue;
@@ -467,6 +485,7 @@
             g.drawImage(AP.fx('heart'), b.x + 2, b.y + 2);
           }
         }
+        if (c.carry) g.drawImage(AP.fx('plates'), Math.round(c._sx - 4), Math.round(c._sy - 30 + Math.sin(t * 8)));
         if (c.vip && c.state !== 'leave') g.drawImage(AP.fx('spark'), Math.round(c._sx + 8), Math.round(c._sy - 30 + Math.sin(t * 5) * 2));
       }
       for (const m of game.crew) {

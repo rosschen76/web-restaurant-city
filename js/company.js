@@ -81,6 +81,7 @@
         const pick = best(st.staff.filter((m) => !m.boss && m.level >= D.DAY.managerLevel));
         if (pick) {
           pick.manager = true;
+          pick.role = 'generalist';
           pick.head = true;
           named.push(pick.name + '（正店長）');
         }
@@ -89,6 +90,7 @@
         const pick = best(st.staff.filter((m) => !m.boss && !m.manager && m.level >= D.DAY.deputyLevel));
         if (pick) {
           pick.manager = true;
+          pick.role = 'generalist';
           pick.head = false;
           named.push(pick.name + '（副店長）');
         }
@@ -146,6 +148,7 @@
       this.s.staff = this.s.staff.filter((m) => m !== head && m !== deputy);
       for (const [rec, isHead] of [[head, true], [deputy, false]]) {
         rec.manager = true;
+        rec.role = 'generalist';
         rec.head = isHead;
         rec.shift = D.DAY.defaultOpen;
         rec.unpaid = 0;

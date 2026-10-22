@@ -378,17 +378,48 @@ test('打烊時店裡還有客人：在班的員工留下來，客人吃完、�
   assert.equal(g.cleanPlates(), g.plateTotal(), '盤子全部是乾淨的');
 });
 
-test('收店加班有上限：最多 2 小時，之後一定下班（不會被卡住）', () => {
+test('收店：碗洗完才能下班——就算洗好幾個小時也一樣，沒洗完誰都不能走', () => {
   const g = untilClose(26);
-  // 製造一個永遠做不完的狀況：洗碗槽被移走，髒盤子洗不掉
+  g.s.sinkDirty = 150; // 一大堆髒盤子（原本 2 小時的加班上限根本洗不完）
+  const t0 = g.absMin();
+  let firstOut = null;
+  let guard = 0;
+  g.on('clockout', () => {
+    if (firstOut === null) firstOut = { dirty: g.s.sinkDirty, tables: g.dirty.size, t: g.absMin() - t0 };
+  });
+  while (g.crew.some((m) => m.onDuty) && guard++ < 100000) g.update(0.1);
+  assert.ok(guard < 100000, '最後還是全部下班');
+  assert.ok(firstOut, '有人下班');
+  assert.equal(firstOut.dirty, 0, `第一位下班時洗碗槽已經清空（剩 ${firstOut.dirty}）`);
+  assert.equal(firstOut.tables, 0, '桌上的餐具也收完了');
+  assert.equal(g.s.sinkDirty, 0);
+  assert.equal(g.dirty.size, 0);
+  assert.equal(g.cleanPlates(), g.plateTotal(), '盤子全部是乾淨的');
+});
+
+test('收店有安全上限：洗不完時最多留 6 小時，之後一定下班（不會被卡住）', () => {
+  const g = untilClose(26);
+  g.s.sinkDirty = 1e6; // 永遠洗不完
+  const t0 = g.absMin();
+  let guard = 0;
+  while (g.crew.some((m) => m.onDuty) && guard++ < 200000) g.update(0.1);
+  const used = g.absMin() - t0;
+  assert.ok(g.crew.every((m) => !m.onDuty), '到安全上限就下班');
+  assert.ok(used <= D.DAY.closeOvertimeMin + 5, `加班 ${used.toFixed(0)} 分鐘`);
+  assert.ok(used >= D.DAY.closeOvertimeMin - 60, `做不完時會撐到上限附近：${used.toFixed(0)} 分鐘`);
+});
+
+test('沒有洗碗槽：髒盤子洗不掉，不算收店的工作（不會為了洗不掉的碗留到上限）', () => {
+  const g = untilClose(26);
   for (const it of [...g.s.items]) if (it.id === 'sink') g.storeItem(it.uid);
   g.s.sinkDirty = 5;
+  g.customers = [];
+  g.dirty.clear();
+  assert.equal(g.closingWork(), false);
   const t0 = g.absMin();
   let guard = 0;
   while (g.crew.some((m) => m.onDuty) && guard++ < 100000) g.update(0.1);
-  const used = g.absMin() - t0;
-  assert.ok(g.crew.every((m) => !m.onDuty), '加班到上限就下班');
-  assert.ok(used <= D.DAY.closeOvertimeMin + 5, `加班 ${used.toFixed(0)} 分鐘`);
+  assert.ok(g.absMin() - t0 < 60, '很快就下班');
 });
 
 test('收店只在已經打烊後才生效：營業中班表結束照樣下班（每班 8 小時）', () => {

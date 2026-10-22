@@ -151,6 +151,10 @@
       this.maxStoveTier = this.stoves.reduce((n, x) => Math.max(n, x.tier), -1); // 煮得動多高等級的菜（-1＝沒有爐灶）
       this.sinks = W.findSinks(this.grid);
       this.sinkByUid = new Map(this.sinks.map((x) => [x.uid, x]));
+      this.passes = W.findByFn(this.grid, 'pass'); // 出餐台：廚師放菜、跑堂取餐
+      this.returns = W.findByFn(this.grid, 'return'); // 餐具回收台：客人還餐具、洗碗工收走
+      this.passCap = this.passes.reduce((n, x) => n + x.cap, 0);
+      this.returnCap = this.returns.reduce((n, x) => n + x.cap, 0);
       this.recalc();
       this.afterLayoutChange();
     }
@@ -215,12 +219,21 @@
       for (const c of this.customers) {
         if (c.state === 'leave') {
           this.relocateIfBlocked(c);
-          c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y) || [];
+          c.path = this.leavePath(c);
         }
       }
       for (const m of this.crew) {
         this.abortJob(m);
         this.relocateIfBlocked(m);
+      }
+      // 出餐台被收走了：台上的餐點作廢，單子留著讓廚師重煮（沒有出餐台就直接端去桌邊）
+      if (!this.passes.length) {
+        for (const c of this.customers) {
+          if (c.onCounter) {
+            c.onCounter = false;
+            c.plate = false;
+          }
+        }
       }
     }
 
@@ -353,6 +366,8 @@
         carry: null,
         cookTotal: 1,
         carryPlates: 0,
+        haul: 0, // 洗碗工預定從回收台搬走的餐具數
+        tray: [], // 跑堂托盤上還沒送的客人（一趟最多端 PL.tray 份餐點）
         sink: null,
         onDuty: this.onShift(rec), // 在班才會出現在店裡
         ending: false, // 下班時間到了，手上的事做完就走
@@ -429,7 +444,7 @@
           } else if (m.overtime && abs - m.endingSince >= DAYC.closeOvertimeMin) {
             this.clockOut(m, abs); // 收店加班已經到上限：不管手上的事，馬上下班
           } else if (closing) {
-            // 班表結束時已經打烊、還有客人或餐具沒處理完：留下來把店收乾淨（加班有上限，不會無限留下）
+            // 班表結束時已經打烊、還有客人或餐具沒處理完：留下來把店收乾淨，洗完碗才能下班（安全上限 6 小時，不會無限留下）
             if (!m.overtime) {
               m.overtime = true;
               m.endingSince = abs;
@@ -452,13 +467,38 @@
     /** 打烊後還有事沒做完：客人還在店裡（用餐、等結帳）、桌上有餐具、洗碗槽裡有髒盤子、手上還捧著餐具 */
     closingWork() {
       if (!this.dayMode || this.isOpen()) return false;
-      return this.customers.length > 0 || this.dirty.size > 0 || this.s.sinkDirty > 0 || this.crew.some((m) => m.carryPlates > 0);
+      // 沒有洗碗槽就沒辦法洗：髒盤子不算（免得員工為了洗不掉的碗一直留到安全上限）
+      const washable = this.sinks.length > 0;
+      return this.customers.length > 0 || (washable && (this.dirty.size > 0 || this.s.sinkDirty > 0 || this.s.returnDirty > 0)) || this.crew.some((m) => m.carryPlates > 0);
+    }
+
+    /** 廚師的崗位：挑一座還沒被其他廚師佔用的爐灶（找不到就共用最近的），待命時站在爐灶旁。 */
+    cookHome(m) {
+      let st = m.home != null ? this.stoveByUid.get(m.home) : null;
+      if (!st) {
+        const taken = new Map();
+        for (const x of this.crew) if (x !== m && x.home != null) taken.set(x.home, (taken.get(x.home) || 0) + 1);
+        let best = null;
+        for (const cand of this.stoves) {
+          const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), cand.access);
+          if (!r) continue;
+          const score = (taken.get(cand.uid) || 0) * 100 + r.path.length;
+          if (!best || score < best.score) best = { cand, score };
+        }
+        if (!best) return;
+        st = best.cand;
+        m.home = st.uid;
+      }
+      const here = st.access.some((a) => a.x === Math.floor(m.x) && a.y === Math.floor(m.y));
+      if (here) return;
+      const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), st.access);
+      if (r) m.path = r.path;
     }
 
     /** 往前走 dt 秒的時鐘；回傳這一步經過的遊戲分鐘數。 */
     advanceClock(dt) {
       const quiet = !this.isOpen() && this.customers.length === 0 && this.queue.length === 0;
-      const chores = (this.dirty.size > 0 || this.s.sinkDirty > 0) && this.crew.some((m) => m.onDuty);
+      const chores = (this.dirty.size > 0 || this.s.sinkDirty > 0 || this.s.returnDirty > 0) && this.crew.some((m) => m.onDuty);
       const rate = (60 / DAYC.hourReal) * (quiet && !chores ? DAYC.nightFast : 1);
       const dm = dt * rate;
       if (!this.headless && this.s.company) this.s.company.gameMin += dm; // 公司的時間只由玩家所在的店推進
@@ -651,7 +691,9 @@
         const c = this.customerById(m.job.cid);
         if (c && c.claimedBy === m.id) {
           c.claimedBy = null;
-          if (c.state === 'ordering' || c.state === 'wait_food') c.state = 'wait_order';
+          if (c.state === 'ordering' || (c.state === 'wait_food' && !c.ticket)) c.state = 'wait_order'; // 單子已經送進廚房的客人不用重新點餐
+          if (c.cookBy === m.id) c.cookBy = null;
+          if (!c.onCounter) c.plate = false; // 煮到一半、端在手上的餐點作廢，預留的盤子還回去
         }
       }
       if (m.stove != null && this.stoveBusy.get(m.stove) === m.id) this.stoveBusy.delete(m.stove);
@@ -673,6 +715,15 @@
         if (this.sinkBusy.get(m.sink) === m.id) this.sinkBusy.delete(m.sink);
         m.sink = null;
       }
+      m.haul = 0;
+      for (const cid of m.tray || []) {
+        const t = this.customerById(cid);
+        if (t && t.claimedBy === m.id) {
+          t.claimedBy = null;
+          t.plate = false; // 托盤上的餐點作廢，單子留著讓廚師重煮
+        }
+      }
+      m.tray = [];
       m.job = null;
       m.stove = null;
       m.carry = null;
@@ -692,12 +743,18 @@
      * 員工手上端著的、洗碗槽裡待洗的。全部由實際狀態推算，所以任何中途取消都不會讓盤子遺失。
      */
     cleanPlates() {
+      return Math.max(0, this.plateTotal() - this.plateUsed());
+    }
+
+    /** 被占用的盤子總數（不夾在 0 以上，測試用來檢查盤子不會憑空多出來） */
+    plateUsed() {
       let used = this.s.sinkDirty;
-      for (const c of this.customers) if (c.plate) used++;
+      used += this.s.returnDirty; // 回收台上的髒餐具
+      for (const c of this.customers) if (c.plate || c.carry) used++; // 預留給客人的、客人手上拿去還的
       for (const p of this.parties) used += p.dined;
       for (const d of this.dirty.values()) used += d.plates;
       for (const m of this.crew) used += m.carryPlates || 0;
-      return Math.max(0, this.plateTotal() - used);
+      return used;
     }
 
     /* ───────── 客人 ───────── */
@@ -1242,7 +1299,8 @@
       if (c.state === 'leave') return;
       if (c.claimedBy != null) {
         const m = this.crewById(c.claimedBy);
-        if (m) this.abortJob(m);
+        if (m && m.job && m.job.cid === c.id) this.abortJob(m);
+        else if (m) m.tray = m.tray.filter((id) => id !== c.id); // 在托盤上、還沒輪到的：只拿掉這一份
       }
       if (c.payBy != null) {
         const boss = this.crewById(c.payBy);
@@ -1256,9 +1314,53 @@
       c.angry = !!angry;
       const g = this.grid;
       this.relocateIfBlocked(c);
-      c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y);
-      if (!c.path) c.path = [];
-      c.dead = c.path.length === 0 && Math.floor(c.x) === g.door.x && Math.floor(c.y) === g.door.y;
+      c.path = this.leavePath(c);
+      c.dead = !c.carry && c.path.length === 0 && Math.floor(c.x) === g.door.x && Math.floor(c.y) === g.door.y;
+    }
+
+    /** 回收台上的餐具＋客人手上正要去還的（回收台的容量就是看這個數字） */
+    returnLoad() {
+      let n = this.s.returnDirty;
+      for (const c of this.customers) if (c.carry) n++;
+      return n;
+    }
+
+    /** 吃完要走的客人：回收台還有位子就把餐具端去還（桌子馬上空出來）；滿了或沒有回收台，餐具留在桌上等員工收。 */
+    carryPlateAway(c) {
+      if (!this.returns.length || this.returnLoad() >= this.returnCap) return;
+      const party = this.parties.find((x) => x.id === c.party);
+      if (!party || party.dined <= 0) return;
+      party.dined--;
+      c.carry = true; // 餐具從桌上轉到客人手上（盤子數不變）
+    }
+
+    /** 離場的路線：手上有餐具先繞去回收台，否則直接走向大門。回收台不見了就把餐具直接丟進洗碗槽。 */
+    leavePath(c) {
+      const g = this.grid;
+      const fx = Math.floor(c.x);
+      const fy = Math.floor(c.y);
+      if (c.carry) {
+        let best = null;
+        for (const st of this.returns) {
+          const r = W.nearestReachable(g, fx, fy, st.access);
+          if (r && (!best || r.path.length < best.path.length)) best = r;
+        }
+        if (best) return best.path;
+        this.s.sinkDirty++;
+        c.carry = false;
+      }
+      return W.findPath(g, fx, fy, g.door.x, g.door.y) || [];
+    }
+
+    /** 客人走到回收台，把餐具放下，接著走向大門。 */
+    dropReturn(c) {
+      if (this.returns.length) this.s.returnDirty++;
+      else this.s.sinkDirty++;
+      c.carry = false;
+      this.emit('plates', { x: c.x, y: c.y });
+      const g = this.grid;
+      c.path = W.findPath(g, Math.floor(c.x), Math.floor(c.y), g.door.x, g.door.y) || [];
+      if (!c.path.length) c.gone = true;
     }
 
     /**
@@ -1374,7 +1476,10 @@
         case 'leave':
           c.t += dt;
           c.walking = false;
-          if (this.follow(c, CUSTOMER_SPEED * 1.15, dt) || c.dead) c.gone = true;
+          if (this.follow(c, CUSTOMER_SPEED * 1.15, dt) || c.dead) {
+            if (c.carry && !c.dead) this.dropReturn(c);
+            else c.gone = true;
+          }
           break;
         default:
       }
@@ -1429,6 +1534,7 @@
       c.payBy = null;
       this.addCoins(total, c.x, c.y);
       this.emit('collect', { auto: !boss });
+      this.carryPlateAway(c);
       this.startLeave(c, false);
       this.changed();
     }
@@ -1450,7 +1556,7 @@
     dispatchBoss() {
       if (this.hasRegister) return; // 有收銀機：客人自助結帳，掌櫃不用跑腿
       // 能收款的人：在班的店掌櫃與值班店長。煮到一半或上菜中的不打斷
-      const free = ['idle', 'to_customer', 'taking', 'wait_stove', 'wait_plate', 'to_stove', 'to_clean', 'to_wash', 'washing'];
+      const free = ['idle', 'to_customer', 'taking', 'wait_stove', 'wait_plate', 'to_stove', 'to_clean', 'to_wash', 'washing', 'to_station'];
       const payers = this.crew.filter((m) => m.onDuty && !m.ending && this.canCollect(m.rec) && free.includes(m.state));
       if (!payers.length) return;
       const waiting = this.customers.filter((c) => c.state === 'wait_pay' && c.payBy == null);
@@ -1476,18 +1582,48 @@
       }
     }
 
+    /* ───────── 職務分派 ───────── */
+
+    /** 目前在班（還沒下班）的員工涵蓋了哪些職責 */
+    coveredDuties() {
+      const have = new Set();
+      for (const m of this.crew) if (m.onDuty && !m.ending) for (const d of D.ROLES[D.roleOf(m.rec)].duties) have.add(d);
+      return have;
+    }
+
+    /**
+     * 這位員工做這項職責的順位：0＝本職、1＝通才（缺人時補位）、2＝沒有任何人負責這項職責時的臨時支援、-1＝不能做。
+     * 通才（含掌櫃與正副店長）永遠排在專職後面，所以只有專職的人手不夠時才會被派去補。
+     */
+    dutyRank(m, duty, have) {
+      const role = D.roleOf(m.rec);
+      if (role === 'generalist') return 1;
+      if (D.ROLES[role].duties.includes(duty)) return 0;
+      return have.has(duty) ? -1 : 2;
+    }
+
+    /** 從閒置員工中挑一位去做 duty：順位優先，同順位挑離目標最近的；tiles 是目標旁可以站的格子。 */
+    pick(idle, duty, tiles, have) {
+      let best = null;
+      for (const m of idle) {
+        const rank = this.dutyRank(m, duty, have);
+        if (rank < 0) continue;
+        const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), tiles);
+        if (!r) continue;
+        if (!best || rank < best.rank || (rank === best.rank && r.path.length < best.path.length)) best = { m, rank, ...r };
+      }
+      return best;
+    }
+
     /** 把待收拾的桌子分給閒置員工（含掌櫃）。 */
-    dispatchClean(idle) {
+    dispatchClean(idle, have) {
+      have = have || this.coveredDuties();
       for (const [uid, d] of this.dirty) {
         if (!idle.length) return;
         if (d.claimedBy != null) continue;
         const t = this.tables.get(uid);
         if (!t) continue;
-        let best = null;
-        for (const m of idle) {
-          const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), t.access);
-          if (r && (!best || r.path.length < best.path.length)) best = { m, ...r };
-        }
+        const best = this.pick(idle, 'clean', t.access, have);
         if (!best) continue;
         const m = best.m;
         d.claimedBy = m.id;
@@ -1514,25 +1650,25 @@
       m.idleT = 0.2;
     }
 
-    /** 有更急的工作（客人等點餐、等結帳、候位等桌子）時，洗碗先放一邊。 */
+    /** 有更急的工作（客人等點餐、等結帳、等上菜、候位等桌子）時，洗碗先放一邊（專職洗碗工只在候位等桌子時才放下）。 */
     urgentWork(m) {
+      const queued = this.queue.length > 0 && this.dirty.size > 0;
+      if (D.roleOf(m.rec) === 'dishwasher') return queued;
       if (this.customers.some((c) => c.state === 'wait_order' && c.claimedBy == null)) return true;
+      if (this.customers.some((c) => c.onCounter && c.claimedBy == null)) return true;
       if (this.canCollect(m.rec) && !this.hasRegister && this.customers.some((c) => c.state === 'wait_pay' && c.payBy == null)) return true;
-      return this.queue.length > 0 && this.dirty.size > 0;
+      return queued;
     }
 
     /** 把待洗的盤子分給閒置員工：一個洗碗槽同時只有一個人洗。 */
-    dispatchWash(idle) {
+    dispatchWash(idle, have) {
       if (!this.sinks.length) return;
+      have = have || this.coveredDuties();
       let need = this.s.sinkDirty - this.sinkBusy.size;
       for (const sk of this.sinks) {
         if (need <= 0 || !idle.length) return;
         if (this.sinkBusy.has(sk.uid)) continue;
-        let best = null;
-        for (const m of idle) {
-          const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), sk.access);
-          if (r && (!best || r.path.length < best.path.length)) best = { m, ...r };
-        }
+        const best = this.pick(idle, 'wash', sk.access, have);
         if (!best) continue;
         const m = best.m;
         this.sinkBusy.set(sk.uid, m.id);
@@ -1544,28 +1680,112 @@
       }
     }
 
+    /** 餐具回收台上的髒餐具：派洗碗工（或補位的人）一次搬一批去洗碗槽。 */
+    dispatchHaul(idle, have) {
+      if (!this.returns.length || !this.sinks.length) return;
+      have = have || this.coveredDuties();
+      let avail = this.s.returnDirty;
+      for (const m of this.crew) if (m.state === 'to_station') avail -= m.haul;
+      if (avail < 2 && this.cleanPlates() >= 3 && this.isOpen() && this.customers.length > 0) return; // 只剩一個餐具不值得跑一趟（盤子不夠、打烊或店裡沒客人就不挑剔）
+      const tiles = [];
+      for (const st of this.returns) tiles.push(...st.access);
+      while (avail > 0 && idle.length) {
+        const best = this.pick(idle, 'haul', tiles, have);
+        if (!best) return;
+        const m = best.m;
+        m.haul = Math.min(avail, PL.haulBatch);
+        m.state = 'to_station';
+        m.path = best.path;
+        avail -= m.haul;
+        idle.splice(idle.indexOf(m), 1);
+      }
+    }
+
+    /** 出餐台上做好的餐點：派跑堂（或補位的人）去取餐、端給客人。 */
+    dispatchServe(idle, have) {
+      if (!this.passes.length) return;
+      const ready = this.customers.filter((c) => c.state === 'wait_food' && c.onCounter && c.claimedBy == null);
+      if (!ready.length) return;
+      ready.sort((a, b) => a.p - b.p);
+      const tiles = [];
+      for (const st of this.passes) tiles.push(...st.access);
+      for (const c of ready) {
+        if (!idle.length) return;
+        const best = this.pick(idle, 'serve', tiles, have);
+        if (!best) return;
+        const m = best.m;
+        m.job = { cid: c.id };
+        c.claimedBy = m.id;
+        m.state = 'to_pickup';
+        m.path = best.path;
+        idle.splice(idle.indexOf(m), 1);
+      }
+    }
+
+    /** 出餐台目前的負載：台上的餐點，加上廚師正在煮、等一下要放上來的 */
+    passLoad() {
+      let n = 0;
+      for (const c of this.customers) if (c.onCounter || c.cookBy != null) n++;
+      return n;
+    }
+
+    /** 單子已經送進廚房的客人：派廚師（或補位的人）去煮。出餐台滿了廚師就先等。 */
+    dispatchCook(idle, have) {
+      const tickets = this.customers.filter((c) => c.state === 'wait_food' && c.ticket && c.claimedBy == null && !c.onCounter);
+      if (!tickets.length) return;
+      tickets.sort((a, b) => a.p - b.p);
+      for (const c of tickets) {
+        if (!idle.length) return;
+        if (this.passes.length && this.passLoad() >= this.passCap) return; // 出餐台滿了，廚師暫停
+        if (this.cleanPlates() < 1) return;
+        const cands = idle
+          .map((m) => ({ m, rank: this.dutyRank(m, 'cook', have) }))
+          .filter((x) => x.rank >= 0)
+          .sort((a, b) => a.rank - b.rank);
+        for (const { m } of cands) {
+          m.job = { cid: c.id };
+          if (this.claimStove(m)) {
+            c.claimedBy = m.id;
+            c.cookBy = m.id;
+            idle.splice(idle.indexOf(m), 1);
+            break;
+          }
+          m.job = null;
+        }
+      }
+    }
+
     dispatch() {
       this.dispatchBoss();
       const plates = this.cleanPlates();
       // 盤子用完了：在等盤子的員工不能乾等（收桌子、洗碗也需要人手），先放下手上的單去處理餐具
-      if (plates < 1 && (this.s.sinkDirty > 0 || this.dirty.size > 0)) for (const m of this.crew) if (m.state === 'wait_plate') this.abortJob(m);
+      if (plates < 1 && (this.s.sinkDirty > 0 || this.dirty.size > 0 || this.s.returnDirty > 0)) for (const m of this.crew) if (m.state === 'wait_plate') this.abortJob(m);
       const idle = this.crew.filter((m) => m.onDuty && !m.ending && m.state === 'idle' && !m.job && m.rec.energy > REST_BELOW);
       if (!idle.length) return;
-      // 盤子快不夠了：先處理餐具（收桌、洗碗）；有人在門外等位時，也先收桌子讓位子盡快空出來
-      if (plates < 2 || this.queue.length) this.dispatchClean(idle);
-      if (this.s.sinkDirty > 0 && plates < 2) this.dispatchWash(idle);
-      // 沒有盤子就先不接新單（接了也煮不了）
+      const have = this.coveredDuties();
+      // 盤子快不夠了：先處理餐具（收桌、搬回收台、洗碗）；有人在門外等位時，也先收桌子讓位子盡快空出來
+      if (plates < 2 || this.queue.length) this.dispatchClean(idle, have);
+      if (plates < 2) {
+        this.dispatchHaul(idle, have);
+        if (this.s.sinkDirty > 0) this.dispatchWash(idle, have);
+      }
+      this.dispatchServe(idle, have); // 做好的餐點不能放涼：先端菜
+      this.dispatchOrders(idle, have, plates);
+      this.dispatchCook(idle, have);
+      this.dispatchClean(idle, have);
+      this.dispatchHaul(idle, have);
+      this.dispatchWash(idle, have);
+    }
+
+    /** 接客人的單（沒有盤子就先不接，接了也煮不了）。 */
+    dispatchOrders(idle, have, plates) {
       const waiting = plates < 1 ? [] : this.customers.filter((c) => c.state === 'wait_order' && c.claimedBy == null);
       waiting.sort((a, b) => a.p - b.p);
       for (const c of waiting) {
         if (!idle.length) break;
         const seat = this.seatByChair.get(c.seat);
         if (!seat) continue;
-        let best = null;
-        for (const m of idle) {
-          const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), seat.access);
-          if (r && (!best || r.path.length < best.path.length)) best = { m, ...r };
-        }
+        const best = this.pick(idle, 'order', seat.access, have);
         if (!best) continue;
         const m = best.m;
         m.job = { cid: c.id };
@@ -1574,8 +1794,6 @@
         c.claimedBy = m.id;
         idle.splice(idle.indexOf(m), 1);
       }
-      this.dispatchClean(idle);
-      this.dispatchWash(idle);
     }
 
     claimStove(m) {
@@ -1625,6 +1843,9 @@
           m.idleT -= dt;
           if (m.path.length) {
             this.follow(m, spd * 0.6, dt);
+          } else if (D.roleOf(rec) === 'cook' && this.stoves.length) {
+            // 廚師待命時守在自己的爐灶旁，接單馬上就能開火
+            this.cookHome(m);
           } else if (m.idleT <= 0) {
             m.idleT = this.rng.range(2.5, 6);
             const tx = clamp(Math.floor(m.x) + this.rng.int(-2, 2), 0, this.grid.w - 1);
@@ -1754,8 +1975,17 @@
           m.t -= dt;
           if (m.t <= 0) {
             c.state = 'wait_food';
-            this.tryClaim(m);
-            m.t = 0.3;
+            if (D.roleOf(rec) === 'waiter') {
+              // 跑堂只負責收單：單子馬上送進廚房，等廚師來接，自己繼續跑下一桌
+              c.ticket = true;
+              c.claimedBy = null;
+              m.job = null;
+              m.state = 'idle';
+              m.idleT = 0.2;
+            } else {
+              this.tryClaim(m);
+              m.t = 0.3;
+            }
           }
           break;
         case 'wait_stove':
@@ -1786,6 +2016,18 @@
             if (this.stoveBusy.get(m.stove) === m.id) this.stoveBusy.delete(m.stove);
             m.stove = null;
             m.carry = c.dish;
+            // 單子是跑堂收的而且有出餐台：餐點放上出餐台，等跑堂來端
+            let rp = null;
+            if (c.ticket) for (const st of this.passes) {
+              const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), st.access);
+              if (r && (!rp || r.path.length < rp.path.length)) rp = r;
+            }
+            if (rp) {
+              m.path = rp.path;
+              m.state = 'to_pass';
+              this.emit('cooked', { x: m.x, y: m.y });
+              break;
+            }
             const seat = this.seatByChair.get(c.seat);
             const r = seat && W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), seat.access);
             if (!r) {
@@ -1795,6 +2037,80 @@
               m.state = 'to_serve';
               this.emit('cooked', { x: m.x, y: m.y });
             }
+          }
+          break;
+        case 'to_pass':
+          if (this.follow(m, spd, dt)) {
+            m.state = 'placing';
+            m.t = PL.dropTime / this.speedOf(rec);
+          }
+          break;
+        case 'placing':
+          m.t -= dt;
+          if (m.t <= 0) {
+            c.onCounter = true;
+            c.cookBy = null;
+            c.claimedBy = null;
+            this.gainStaffXp(rec);
+            rec.energy = Math.max(0, rec.energy - (2 + this.orderCookRaw(c) * 0.7));
+            m.job = null;
+            m.carry = null;
+            m.state = 'idle';
+            m.idleT = 0.2;
+            this.changed();
+          }
+          break;
+        case 'to_pickup':
+          if (this.follow(m, spd, dt)) {
+            m.state = 'picking';
+            m.t = PL.dropTime / this.speedOf(rec);
+          }
+          break;
+        case 'picking':
+          m.t -= dt;
+          if (m.t <= 0) {
+            const seat = this.seatByChair.get(c.seat);
+            const r = seat && W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), seat.access);
+            if (!r || !c.onCounter) {
+              this.abortJob(m); // 走不到客人那桌：餐點留在出餐台
+              break;
+            }
+            c.onCounter = false;
+            m.carry = c.dish;
+            m.path = r.path;
+            m.state = 'to_serve';
+            // 出餐台上還有等著上的餐點，順手一起端（托盤一趟最多 PL.tray 份，挑離這桌近的）
+            const dist = (x) => {
+              const sx = this.seatByChair.get(x.seat);
+              return sx ? Math.abs(sx.x - seat.x) + Math.abs(sx.y - seat.y) : Infinity;
+            };
+            const extras = this.customers
+              .filter((x) => x !== c && x.state === 'wait_food' && x.onCounter && x.claimedBy == null && dist(x) <= PL.trayReach)
+              .sort((a, b) => dist(a) - dist(b))
+              .slice(0, PL.tray - 1);
+            for (const x of extras) {
+              x.onCounter = false;
+              x.claimedBy = m.id;
+              m.tray.push(x.id);
+            }
+          }
+          break;
+        case 'to_station':
+          if (this.follow(m, spd, dt)) {
+            const take = Math.min(m.haul, this.s.returnDirty);
+            this.s.returnDirty -= take;
+            m.haul = 0;
+            const r = take > 0 ? this.nearestSink(m) : null;
+            if (take > 0 && !r) this.s.sinkDirty += take;
+            if (r) {
+              m.carryPlates = take;
+              m.path = r.path;
+              m.state = 'to_sink';
+            } else {
+              m.state = 'idle';
+              m.idleT = 0.2;
+            }
+            this.changed();
           }
           break;
         case 'to_serve':
@@ -1816,12 +2132,29 @@
             c.eatTotal = c.t;
             c.claimedBy = null;
             this.gainStaffXp(rec);
-            rec.energy = Math.max(0, rec.energy - (4 + this.orderCookRaw(c) * 0.7));
+            rec.energy = Math.max(0, rec.energy - (c.ticket ? 2 : 4 + this.orderCookRaw(c) * 0.7)); // 跑堂的單子由廚師出了另一半力
             m.job = null;
             m.carry = null;
             m.state = 'idle';
             m.idleT = 0.4;
             this.emit('delivered', { x: c.x, y: c.y });
+            // 托盤上還有餐點：接著送下一桌
+            while (m.tray.length) {
+              const nc = this.customerById(m.tray.shift());
+              if (!nc || nc.claimedBy !== m.id || nc.state !== 'wait_food') continue;
+              const ns = this.seatByChair.get(nc.seat);
+              const nr = ns && W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), ns.access);
+              if (!nr) {
+                nc.claimedBy = null;
+                nc.plate = false;
+                continue;
+              }
+              m.job = { cid: nc.id };
+              m.carry = nc.dish;
+              m.path = nr.path;
+              m.state = 'to_serve';
+              break;
+            }
           }
           break;
         default:
@@ -2288,8 +2621,7 @@
       const slotOrder = k === 1 ? [0] : [0, k - 1, ...Array.from({ length: Math.max(0, k - 2) }, (_, i) => i + 1)];
       // 掌櫃、值班店長在前，其餘依等級由高到低
       const rank = (m) => (m.boss ? 3 : m.head ? 2 : m.manager ? 1 : 0); // 掌櫃／正店長開店班，副店長收店班
-      const people = [...s.staff].sort((a, b) => rank(b) - rank(a) || b.level - a.level || a.id - b.id);
-      const count = Array(24).fill(0); // 各鐘點已經排了幾個人
+      let count = Array(24).fill(0); // 各鐘點已經排了幾個人（每個職務各排各的，每個鐘點都要有各職務的人）
       const hoursOf = (st) => {
         const hs = [];
         for (let h = Math.max(st, open); h < Math.min(st + SH, close); h++) hs.push(h % 24);
@@ -2322,11 +2654,16 @@
         }
         return pick;
       };
-      people.forEach((rec, i) => {
-        const st = i < k ? slots[slotOrder[i]] : best(rec.level >= DAYC.seniorLevel); // 先排滿營業時間，其餘補最缺人的時段
-        rec.shift = ((st % 24) + 24) % 24;
-        cover(rec.shift);
-      });
+      // 通才（含掌櫃與正副店長）先排，接著廚師、跑堂、洗碗工各自排：每個職務都依客流比例分配到各時段
+      for (const role of D.ROLE_LIST) {
+        count = Array(24).fill(0);
+        const people = s.staff.filter((m) => D.roleOf(m) === role).sort((a, b) => rank(b) - rank(a) || b.level - a.level || a.id - b.id);
+        people.forEach((rec, i) => {
+          const st = i < k ? slots[slotOrder[i]] : best(rec.level >= DAYC.seniorLevel); // 先排滿營業時間，其餘補最缺人的時段
+          rec.shift = ((st % 24) + 24) % 24;
+          cover(rec.shift);
+        });
+      }
     }
 
     /** 每個鐘點（0~23）有幾位員工在班、其中幾位能收款；以及是否營業時段。 */
@@ -2335,16 +2672,18 @@
       const staff = Array(24).fill(0);
       const payers = Array(24).fill(0);
       const open = Array(24).fill(false);
+      const roles = Object.fromEntries(D.ROLE_LIST.map((r) => [r, Array(24).fill(0)])); // 各職務每個鐘點的在班人數
       for (let h = 0; h < 24; h++) {
         open[h] = h >= s.schedule.open && h < s.schedule.close;
         for (const rec of s.staff) {
           if ((((h - rec.shift) % 24) + 24) % 24 < DAYC.shiftHours) {
             staff[h]++;
+            roles[D.roleOf(rec)][h]++;
             if (this.canCollect(rec)) payers[h]++;
           }
         }
       }
-      return { staff, payers, open };
+      return { staff, payers, open, roles };
     }
 
     /** 有沒有結帳權限：店掌櫃、正店長，以及 Lv.10 以上的副店長（Lv.8～9 的副店長只能管理，不能結帳） */
@@ -2370,14 +2709,99 @@
         if (hasHead) return this.fail('已經有正店長了，先解除他');
         rec.manager = true;
         rec.head = true;
+        rec.role = 'generalist';
       } else {
         if (rec.level < DAYC.deputyLevel) return this.fail(`副店長要 Lv.${DAYC.deputyLevel} 以上`);
         if (hasDeputy) return this.fail('已經有副店長了，先解除他');
         rec.manager = true;
         rec.head = false;
+        rec.role = 'generalist';
       }
       if (s.schedule.auto) this.autoSchedule();
       return this.done();
+    }
+
+    /* ───────── 職務分工 ───────── */
+
+    /** 設定員工的職務（店掌櫃與正副店長強制是通才） */
+    setRole(id, role) {
+      const rec = this.s.staff.find((m) => m.id === id);
+      if (!rec) return this.fail('找不到員工');
+      if (!D.ROLES[role]) return this.fail('沒有這個職務');
+      if (rec.boss || rec.manager || rec.head) return this.fail(rec.boss ? '店掌櫃一定是通才，哪個職務缺人就去補' : '正副店長一定是通才，哪個職務缺人就去補');
+      rec.role = role;
+      if (this.s.schedule.auto) this.autoSchedule();
+      return this.done();
+    }
+
+    /**
+     * 各職務每服務一位客人要花的工時（秒）——自動分配職務的依據（數字來自模擬量測）：
+     * 廚師＝爐灶烹飪時間（菜單越貴越久）＋端去出餐台（沒有出餐台就得走到客人桌邊）的路，再乘上體力消耗的折損；
+     * 跑堂＝點餐＋端菜（沒有出餐台就只剩點餐）；洗碗工＝搬回收台的餐具＋洗碗（沒有回收台就要自己收桌）。
+     */
+    roleLoads() {
+      const L = D.ROLE_LOAD;
+      const dishes = (this.s.menu && this.s.menu.length ? this.s.menu : Object.keys(this.s.dishes)).filter((id) => D.dishes[id]);
+      const base = dishes.length ? dishes.reduce((n, id) => n + D.dishes[id].cook, 0) / dishes.length : 5;
+      const stove = this.stoves.length ? this.stoves.reduce((n, x) => n + x.speed, 0) / this.stoves.length : 1;
+      const crew = this.s.staff.filter((m) => !m.boss && !m.manager && !m.head);
+      const skill = crew.length ? crew.reduce((n, m) => n + this.skillOf(m), 0) / crew.length : 1;
+      const cook = Math.max(1.2, (base * (1 - this.fridgeBonus)) / (stove * skill));
+      const pass = this.passes.length > 0;
+      const ret = this.returns.length > 0;
+      return {
+        cook: (cook + (pass ? L.cookToPass : L.cookToTable)) * L.cookFatigue,
+        waiter: pass ? L.waiterFull : L.waiterOrderOnly,
+        dishwasher: ret ? L.washReturn : L.washTables,
+      };
+    }
+
+    /**
+     * 自動分配職務：一般員工（不含掌櫃與正副店長，他們是通才）依各職務的工時比例分配（roleLoads）。
+     * 技術最好的當廚師，其餘速度最快的當跑堂，剩下的洗碗。
+     */
+    autoAssignRoles() {
+      const pool = this.s.staff.filter((m) => !m.boss && !m.manager && !m.head);
+      if (!pool.length) return this.fail('沒有可以分配職務的員工（掌櫃與正副店長是通才）');
+      const n = pool.length;
+      if (n < 4) return this.fail('一般員工少於 4 位時，分工反而比通才慢（人手不夠各管各的會互相等）；先維持通才，等人手多了再分配');
+      const loads = this.roleLoads();
+      const total = loads.cook + loads.waiter + loads.dishwasher;
+      // 最大餘數法分配人數；人手夠（3 位以上）時每個職務至少 1 位
+      const want = { cook: (n * loads.cook) / total, waiter: (n * loads.waiter) / total, dishwasher: (n * loads.dishwasher) / total };
+      const cnt = { cook: Math.floor(want.cook), waiter: Math.floor(want.waiter), dishwasher: Math.floor(want.dishwasher) };
+      if (n >= 3) for (const r of Object.keys(cnt)) cnt[r] = Math.max(1, cnt[r]);
+      const order = Object.keys(want).sort((a, b) => want[b] - cnt[b] - (want[a] - cnt[a]));
+      let left = n - cnt.cook - cnt.waiter - cnt.dishwasher;
+      for (let i = 0; left > 0; i++, left--) cnt[order[i % 3]]++;
+      for (let i = 0; left < 0; i++) {
+        const r = order[2 - (i % 3)];
+        if (cnt[r] > (n >= 3 ? 1 : 0)) {
+          cnt[r]--;
+          left++;
+        }
+      }
+      const byCook = [...pool].sort((a, b) => this.skillOf(b) - this.skillOf(a) || a.id - b.id);
+      const cookSet = new Set(byCook.slice(0, cnt.cook).map((m) => m.id));
+      const rest = pool.filter((m) => !cookSet.has(m.id)).sort((a, b) => this.speedOf(b) - this.speedOf(a) || a.id - b.id);
+      const waiterSet = new Set(rest.slice(0, cnt.waiter).map((m) => m.id));
+      for (const m of pool) m.role = cookSet.has(m.id) ? 'cook' : waiterSet.has(m.id) ? 'waiter' : 'dishwasher';
+      if (this.s.schedule.auto) this.autoSchedule();
+      return this.done();
+    }
+
+    /** 全部改回通才 */
+    clearRoles() {
+      for (const m of this.s.staff) m.role = 'generalist';
+      if (this.s.schedule.auto) this.autoSchedule();
+      return this.done();
+    }
+
+    /** 各職務目前的人數（含通才） */
+    roleCounts() {
+      const out = Object.fromEntries(D.ROLE_LIST.map((r) => [r, 0]));
+      for (const m of this.s.staff) out[D.roleOf(m)]++;
+      return out;
     }
 
     /** 解除店長職位；不指定 id 就解除第一位（先副店長） */

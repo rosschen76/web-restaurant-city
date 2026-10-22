@@ -89,6 +89,50 @@
       box(g, 3, 4, w - 6, h - 7, '#8fcfee', '#5a7a8c');
       R(g, '#6a747c', w / 2 - 1, 2, 2, 2);
     },
+    pass_1: (g, w, h) => {
+      box(g, 1, 2, w - 2, h - 4, '#c48a52', OUTLINE);
+      R(g, '#f4efe4', 4, 6, 3, 3);
+      R(g, '#f4efe4', 9, 6, 3, 3);
+    },
+    pass_2: (g, w, h) => {
+      box(g, 1, 2, w - 2, h - 4, '#b4bec6', OUTLINE);
+      R(g, '#d9e0e5', 2, 3, w - 4, 4);
+      R(g, '#f4efe4', 4, 9, 3, 3);
+      R(g, '#f4efe4', 9, 9, 3, 3);
+    },
+    pass_3: (g, w, h) => {
+      box(g, 1, 2, w - 2, h - 4, '#c4ccd3', OUTLINE);
+      R(g, '#d94f43', 2, 3, w - 4, 2);
+      for (const x of [3, 7, 11]) R(g, '#f4efe4', x, 8, 3, 3);
+    },
+    pass_4: (g, w, h) => {
+      box(g, 0, 1, w, h - 2, '#d0d8de', OUTLINE);
+      R(g, '#e8863a', 1, 2, w - 2, 2);
+      R(g, '#bfe6f6', 1, 5, w - 2, 5);
+      for (const x of [2, 5, 8, 11]) R(g, '#f4efe4', x, 11, 2, 2);
+    },
+    ret_1: (g, w, h) => {
+      box(g, 1, 2, w - 2, h - 4, '#8a8f99', OUTLINE);
+      R(g, '#4a4f58', 3, 4, w - 6, h - 8);
+      R(g, '#e8e2d0', 5, 6, 4, 3);
+    },
+    ret_2: (g, w, h) => {
+      box(g, 1, 2, w - 2, h - 4, '#a8aeb8', OUTLINE);
+      R(g, '#6a727c', 1, 2, 2, h - 4);
+      R(g, '#e8e2d0', 6, 5, 4, 3);
+      R(g, '#e8e2d0', 8, 9, 4, 3);
+    },
+    ret_3: (g, w, h) => {
+      box(g, 0, 2, w, h - 4, '#7c8590', OUTLINE);
+      R(g, '#2b2f36', 2, 5, w - 4, h - 10);
+      for (let x = 3; x < w - 2; x += 3) R(g, '#444a54', x, 5, 1, h - 10);
+    },
+    ret_4: (g, w, h) => {
+      box(g, 0, 1, w, h - 2, '#9fa8b3', OUTLINE);
+      R(g, '#1f2328', 2, 4, w - 4, h - 8);
+      for (let x = 3; x < w - 2; x += 3) R(g, '#3a414a', x, 4, 1, h - 8);
+      R(g, '#6fe38a', 1, 2, 2, 1);
+    },
     fridge: (g, w, h, f) => {
       box(g, 1, 1, w - 2, h - 2, '#eef2f6', OUTLINE);
       const [x, y, sw, sh] = side(f, w, h, 3);
