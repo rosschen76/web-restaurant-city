@@ -382,7 +382,7 @@
             <div class="sub">${'★'.repeat(x.stars)}${'☆'.repeat(D.MAX_STARS - x.stars)}　風評 ${rep}　${x.room.w}×${x.room.h}　員工 ${x.staff} 位</div>
             <div class="sub">正店長：${x.head ? esc(x.head) : '—'}　副店長：${x.deputy ? esc(x.deputy) + (x.deputyCanCollect ? '' : `（Lv.${D.DAY.managerLevel} 才能結帳）`) : '—'}</div>
             ${warn.map((w) => `<div class="sub bad">⚠ ${esc(w)}</div>`).join('')}
-            ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪 ${fmt(rp.wages)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
+            ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪與福利 ${fmt(rp.wages)}，進貨 ${fmt(rp.procure || 0)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
             </div>
             <div>${x.active ? '' : `<button class="btn small primary" data-act="goto-store" data-id="${x.id}">前往</button>`}
             ${x.kind === 'branch' ? `<button class="btn small danger" data-act="close-branch" data-id="${x.id}">關閉</button>` : ''}</div></div>`;

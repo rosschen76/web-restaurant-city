@@ -64,8 +64,8 @@
    * 整個遊戲是一個「公司」：共用的欄位（金幣、等級、菜單、倉庫、任務…）存在公司層，
    * 每間店只有自己的欄位（格局、員工、風評…）。店面物件用存取器把共用欄位接到公司層，
    * 所以 s.coins、s.level 這些既有寫法完全不用改；JSON.stringify(店面) 仍會得到「單店的平面存檔」。 */
-  const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
-  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
+  const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'ach', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
+  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'menu', 'order', 'stock', 'stockDay', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
 
   /** 把店面接上公司：共用欄位改成存取器（寫入公司層）。 */
   function attach(st, co) {
@@ -141,6 +141,10 @@
       bonus: 0,
       morale: D.MORALE.start,
       lowMorale: 0,
+      menu: [],
+      order: {},
+      stock: {},
+      stockDay: 0,
       over: null,
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       sinkDirty: 0,
@@ -180,6 +184,11 @@
       nextUid: 1,
       inventory: {},
       dishes: { danbing: { cooked: 0 } },
+      ach: {}, // 已達成的成就 id（公司共用）
+      menu: ['danbing'], // 這間店上架的菜（最多 20 道，從學會的菜裡挑）
+      order: { danbing: D.STOCK.startQty }, // 每日進貨量（每天 10 點到貨）
+      stock: { danbing: D.STOCK.startQty }, // 目前庫存（份）
+      stockDay: 0, // 最近一次到貨是第幾天
       staff: [newStaff(1, first)],
       nextStaffId: 2,
       candidates: [],
@@ -311,6 +320,50 @@
     });
   }
 
+  /** 菜單、每日進貨量、庫存、成就（舊存檔沒有就用預設：學會的菜依等級上架、各備一天的量） */
+  function defaultOrderQty(menuLen, level) {
+    const daily = 30 + 3 * level; // 一天大約服務的客人數
+    return Math.max(5, Math.ceil(daily / Math.max(1, menuLen)));
+  }
+  /** 為一間店挑出預設菜單（學會的菜依等級由低到高，最多 menuMax 道），並備好第一天的庫存 */
+  function seedMenu(dst, learned, level, withStock, maxTier) {
+    const ids = Object.keys(learned).filter((id) => D.dishes[id] && (maxTier == null || D.stoveTier(D.dishes[id].stove) <= maxTier)).sort((a, b) => D.dishes[a].level - D.dishes[b].level || D.dishes[a].learn - D.dishes[b].learn);
+    dst.menu = ids.slice(0, D.STOCK.menuMax);
+    const q = defaultOrderQty(dst.menu.length, level);
+    dst.order = {};
+    dst.stock = {};
+    for (const id of dst.menu) {
+      dst.order[id] = q;
+      if (withStock) dst.stock[id] = q;
+    }
+    dst.stockDay = 0;
+  }
+  function cleanMenu(dst, raw, learned, level) {
+    if (!Array.isArray(raw.menu)) {
+      seedMenu(dst, learned, level, true); // 舊存檔：自動上架學會的菜
+      return;
+    }
+    const seen = new Set();
+    dst.menu = [];
+    for (const id of raw.menu) if (typeof id === 'string' && learned[id] && D.dishes[id] && !seen.has(id) && dst.menu.length < D.STOCK.menuMax) {
+      seen.add(id);
+      dst.menu.push(id);
+    }
+    const clean = (o, max) => {
+      const out = {};
+      for (const [id, n] of Object.entries(o && typeof o === 'object' ? o : {})) if (D.dishes[id]) out[id] = Math.floor(num(n, 0, 0, max));
+      return out;
+    };
+    dst.order = clean(raw.order, D.STOCK.orderMax);
+    dst.stock = clean(raw.stock, 1e6);
+    dst.stockDay = Math.floor(num(raw.stockDay, 0, 0, 1e6));
+  }
+  function cleanAch(raw) {
+    const out = {};
+    for (const id of Object.keys(raw && typeof raw === 'object' ? raw : {})) if (D.achievements[id]) out[id] = true;
+    return out;
+  }
+
   /** 福利金、分紅、士氣（舊存檔沒有就用預設值） */
   function cleanMorale(dst, raw) {
     const M = D.MORALE;
@@ -374,6 +427,7 @@
     st.reputation = num(rb.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
     st.lowDays = Math.floor(num(rb.lowDays, 0, 0, 1e4));
     cleanMorale(st, rb);
+    cleanMenu(st, rb, co.core.dishes || { danbing: { cooked: 0 } }, Math.floor(num(co.core.level, 1, 1, D.MAX_LEVEL)));
     st.over = null; // 分店倒閉時就直接關掉了，存檔裡不會有「已倒閉的分店」
     const rs = rb.stats || {};
     st.stats = {
@@ -390,7 +444,7 @@
     st.clock = num(rb.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
     st.syncedMin = num(rb.syncedMin, 0, 0, 1e12);
     const rp = rb.report;
-    st.report = rp && typeof rp === 'object' ? { day: Math.floor(num(rp.day, 1, 1, 1e6)), served: Math.floor(num(rp.served, 0, 0, 1e9)), earned: Math.floor(num(rp.earned, 0, 0, 1e13)), wages: Math.floor(num(rp.wages, 0, 0, 1e13)), reputation: num(rp.reputation, 0, D.REPUTATION.min, D.REPUTATION.max) } : null;
+    st.report = rp && typeof rp === 'object' ? { day: Math.floor(num(rp.day, 1, 1, 1e6)), served: Math.floor(num(rp.served, 0, 0, 1e9)), earned: Math.floor(num(rp.earned, 0, 0, 1e13)), wages: Math.floor(num(rp.wages, 0, 0, 1e13)), procure: Math.floor(num(rp.procure, 0, 0, 1e13)), reputation: num(rp.reputation, 0, D.REPUTATION.min, D.REPUTATION.max) } : null;
     attach(st, co);
     return st;
   }
@@ -451,6 +505,8 @@
     }
     s.dishes = { danbing: { cooked: 0 } };
     for (const [id, v] of Object.entries(raw.dishes || {})) if (D.dishes[id]) s.dishes[id] = { cooked: Math.floor(num(v && v.cooked, 0, 0, 1e9)) };
+    s.ach = cleanAch(raw.ach);
+    cleanMenu(s, raw, s.dishes, s.level);
     const hq = raw.hq && typeof raw.hq === 'object' ? raw.hq : null;
     const { staff, maxId } = cleanStaff(raw.staff);
     if (staff.length) {
@@ -645,5 +701,5 @@
     }
   }
 
-  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, newStore, attach, cleanGm, dailyWage, CORE_KEYS, STORE_KEYS });
+  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, newStore, attach, cleanGm, dailyWage, seedMenu, defaultOrderQty, CORE_KEYS, STORE_KEYS });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

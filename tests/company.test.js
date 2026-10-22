@@ -471,7 +471,7 @@ test('存檔：有分店的公司來回；總經理、各店的設備員工風�
   const g = rich(22);
   const { br, d } = openFirst(g);
   br.reputation = 3.5;
-  br.report = { day: 4, served: 20, earned: 900, wages: 100, reputation: 3.5 };
+  br.report = { day: 4, served: 20, earned: 900, wages: 100, procure: 0, reputation: 3.5 };
   g.transferStaff(d.id, br.id);
   assert.equal(g.switchStore(br.id).ok, true);
   g.renameBoss('王總');

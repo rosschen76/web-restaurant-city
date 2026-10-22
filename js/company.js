@@ -153,6 +153,7 @@
       const st = RC.state.newStore(co.nextStoreId++, name, [head, deputy], this.rng, { day: this.s.day, clock: this.s.clock });
       st.syncedMin = co.gameMin;
       RC.state.attach(st, co);
+      RC.state.seedMenu(st, st.dishes, st.level, true, 0); // 新店只有瓦斯爐：先上架煮得動的菜，各備一天的料
       co.stores.push(st);
       this.syncCrew();
       for (const x of co.stores) if (x !== st) this.ensureManagers(x); // 原本那間店：由剩下的員工中 Lv.10 以上、綜合能力最強的接任正店長，再補副店長
@@ -256,13 +257,15 @@
         st.syncedMin += pending - cap; // 太久以前的不補了
         pending = cap;
       }
-      const g = new Game(st, { seed: (st.id * 7919 + Math.floor(co.gameMin)) >>> 0, headless: true });
+      const g = new RC.Game(st, { seed: (st.id * 7919 + Math.floor(co.gameMin)) >>> 0, headless: true });
       g.quiet = true;
       g.ensureManagers(st); // 沒有掌櫃的店，先把店長缺額補上
       const before = { served: st.stats.served, earned: st.stats.earned };
       let wages = 0;
+      let procure = 0;
       const pay = g.payWages;
       g.payWages = function () {
+        procure += this.procureToday; // 午夜結算（會把今天的進貨花費歸零）之前先記下來
         const r = pay.apply(this, arguments);
         wages += r.paid + r.welfare + r.bonus;
         return r;
@@ -284,6 +287,7 @@
         served: st.stats.served - before.served,
         earned: st.stats.earned - before.earned,
         wages,
+        procure,
         reputation: st.reputation,
       };
       return { id: st.id, name: st.name, closed: false, ...st.report };
@@ -297,7 +301,7 @@
         const r = this.settleStore(st);
         if (r && !r.closed && !r.over) reports.push(r);
       }
-      for (const r of reports) if (r.served > 0 || r.earned > 0) this.toast(`「${r.name}」：服務 ${r.served} 位客人，營收 ${RC.util.fmt(r.earned)}，發出薪資與福利 ${RC.util.fmt(r.wages)}`, 'info');
+      for (const r of reports) if (r.served > 0 || r.earned > 0) this.toast(`「${r.name}」：服務 ${r.served} 位客人，營收 ${RC.util.fmt(r.earned)}，發出薪資與福利 ${RC.util.fmt(r.wages)}，進貨 ${RC.util.fmt(r.procure || 0)}`, 'info');
       if (reports.length) this.changed();
       return reports;
     },

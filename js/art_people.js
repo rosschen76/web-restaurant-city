@@ -172,12 +172,40 @@
       '.....kk.....', '....kjjk....', '...kkkkkk...', '..kvvvvvvk..', '.kvvjvvjvvk.', 'kvvvvvvvvvvk', 'kjjjjjjjjjjk', 'kvvjvvvvjvvk', '.kvvvvvvvvk.', '.kvjvvvvjvk.', '..kkkkkkkk..', '............',
     ],
   };
+  /* 其餘的菜用「容器模板 × 配色」程式生成（dishes.js 的 ic = '容器:主色配色點綴'）。
+   * 模板裡 a/A 是主食材（亮／暗）、b 是配料、c 是點綴，其餘沿用上面的調色盤。 */
+  const VESSELS = {
+    bowl: ['............', '............', '..kkkkkkkk..', '.kaaAaabaak.', 'kaAaabaacaak', 'kabaaacaAabk', 'kAaaaaaaaaAk', 'kkkkkkkkkkkk', 'kwwwwwwwwwwk', '.kwwwwwwwwk.', '..kWWWWWWk..', '...kkkkkk...'],
+    plate: ['............', '............', '............', '...kkkkkk...', '..kaabaaak..', '.kaAaaaAcak.', '.kabaacaaak.', 'kkkkkkkkkkkk', 'kwwwwwwwwwwk', 'kWWWWWWWWWWk', '.kkkkkkkkkk.', '............'],
+    cup: ['.......k....', '......kb....', '.kkkkkkkkkk.', '.kwwwwwwwwk.', '..kaaaaaak..', '..kaAaaaak..', '..kaaaabak..', '..kaaaaaak..', '..kAaaaaAk..', '..kaaaaaak..', '...kkkkkk...', '............'],
+    steam: ['...w..w.....', '....w..w....', '..kkkkkkkk..', '.knnnnnnnnk.', 'knaaAaabaank', 'knnnnnnnnnnk', 'kNNNNNNNNNNk', 'knnnnnnnnnnk', 'kNNNNNNNNNNk', 'knnnnnnnnnnk', '.kkkkkkkkkk.', '............'],
+    pot: ['..w..w..w...', '...w..w..w..', '..w..w..w...', 'kkkkkkkkkkkk', 'kaabaAaabaak', 'kaAaacaaaAak', 'kabaaaaAaabk', 'kDDDDDDDDDDk', 'kDDDDDDDDDDk', '.kDDDDDDDDk.', '..kkkkkkkk..', '............'],
+    cake: ['............', '............', '....kkkkkk..', '...kbcbcbck.', '..kaaaaaaak.', '.kaaaAaaaak.', '.kkkkkkkkkk.', '.kcccccccck.', '.kaaaAaaaak.', '.kkkkkkkkkk.', '............', '............'],
+    bun: ['............', '............', '...kkkkkk...', '..kaaaaAak..', '.kaabaaaaak.', '.kaaaaaacak.', 'kaaAaaaaaaak', 'kaaaaabaaaAk', '.kkkkkkkkkk.', '..kwwwwwwk..', '...kkkkkk...', '............'],
+    tray: ['............', '............', 'kkkkkkkkkkkk', 'kaaabbbcccak', 'kaAaabbcccak', 'kaaaabbcccAk', 'kkkkkkkkkkkk', 'kWWWWWWWWWWk', 'kkkkkkkkkkkk', '............', '............', '............'],
+    glass: ['............', '...kkkkkk...', '..kcccbccck.', '..kbaaaaabk.', '..kaaAaaaak.', '...kaaaAak..', '...kbbbbbk..', '....kaaak...', '.....kwk....', '.....kwk....', '...kkkkkk...', '............'],
+  };
+  const TONES = {
+    r: ['#d9473a', '#9a2b24'], o: ['#f08a3a', '#c0621f'], y: ['#f2c94c', '#d99a2a'], g: ['#5fae4e', '#3a7a35'], n: ['#b8793f', '#7a4a24'],
+    w: ['#f6f1e6', '#d2cabb'], p: ['#f6b3bf', '#d9808f'], b: ['#e4bd7c', '#c4975a'], d: ['#4a3a34', '#2b1d1a'], u: ['#8ec9f0', '#5aa0e0'],
+    c: ['#fff3d6', '#f2e0a8'], t: ['#c89a6a', '#7a5a3a'], v: ['#b89ad8', '#8468b0'], l: ['#b9d95f', '#8aa83a'],
+  };
+  const hashOf = (id) => [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+  /** 依 ic 設定生成菜色圖示；同一容器的菜以名字的雜湊決定要不要左右翻轉，多一點變化 */
+  function genDish(id) {
+    const [vessel, cols] = D.dishes[id].ic.split(':');
+    const [m, ac, ga] = cols.split('');
+    const pal = { ...DL, D: '#4a4a52', a: TONES[m][0], A: TONES[m][1], b: TONES[ac][0], c: TONES[ga][0] };
+    let rows = VESSELS[vessel];
+    if (hashOf(id) & 1) rows = rows.map((r) => [...r].reverse().join(''));
+    return pixmap(rows, pal);
+  }
   const dishCache = new Map();
   function dish(id) {
     let c = dishCache.get(id);
     if (!c) {
-      const rows = DISH[id].map((r) => r.padEnd(12, '.'));
-      c = pixmap(rows, DL);
+      if (DISH[id]) c = pixmap(DISH[id].map((r) => r.padEnd(12, '.')), DL);
+      else c = genDish(id);
       dishCache.set(id, c);
     }
     return c;

@@ -8,31 +8,48 @@
   const DY = [0, 1, 0, -1];
 
   /* ───────── 菜色 ───────── */
-  const dishList = [
-    { id: 'danbing', name: '蛋餅', level: 1, price: 12, cook: 4, eat: 4, learn: 0, xp: 2 },
-    { id: 'soymilk', name: '豆漿', level: 1, price: 9, cook: 3, eat: 3, learn: 60, xp: 1 },
-    { id: 'fantuan', name: '飯糰', level: 2, price: 20, cook: 5, eat: 5, learn: 150, xp: 3 },
-    { id: 'luroufan', name: '滷肉飯', level: 3, price: 30, cook: 6, eat: 6, learn: 400, xp: 4 },
-    { id: 'boba', name: '珍珠奶茶', level: 4, price: 26, cook: 4, eat: 4, learn: 700, xp: 3 },
-    { id: 'xiaolongbao', name: '小籠包', level: 5, price: 46, cook: 7, eat: 6, learn: 1200, xp: 6 },
-    { id: 'chicken', name: '鹽酥雞', level: 6, price: 56, cook: 6, eat: 6, learn: 2000, xp: 7 },
-    { id: 'beefnoodle', name: '牛肉麵', level: 7, price: 80, cook: 9, eat: 8, learn: 3200, xp: 9 },
-    { id: 'oyster', name: '蚵仔煎', level: 8, price: 88, cook: 7, eat: 7, learn: 4500, xp: 10 },
-    { id: 'stinky', name: '臭豆腐', level: 9, price: 80, cook: 6, eat: 6, learn: 6000, xp: 9 },
-    { id: 'pineapple', name: '鳳梨酥', level: 10, price: 66, cook: 4, eat: 4, learn: 8000, xp: 8 },
-    { id: 'hotpot', name: '麻辣鍋', level: 12, price: 180, cook: 12, eat: 10, learn: 16000, xp: 18 },
-    { id: 'mangoice', name: '芒果冰', level: 13, price: 140, cook: 6, eat: 6, learn: 24000, xp: 14 },
-    { id: 'buddha', name: '佛跳牆', level: 16, price: 480, cook: 18, eat: 12, learn: 60000, xp: 32 },
-  ];
+  // 100 道菜（資料在 dishes.js）：10 類各 10 道。cost 是每份食材成本（進貨時付）、stove 是需要的爐灶等級（含以上）。
+  const DISH_CATS = RC.dishData.cats;
+  const dishList = RC.dishData.list;
   const dishes = Object.fromEntries(dishList.map((d) => [d.id, d]));
+  const dishCats = Object.fromEntries(DISH_CATS.map((c) => [c.id, c]));
+  const KIND_NAMES = { main: '主餐', side: '小吃', soup: '湯品', drink: '飲料', dessert: '甜點' };
+  // 爐灶等級：高等級的爐灶可以煮低等級的菜。每道菜要有「等級夠的爐灶」才能賣
+  const STOVE_TIERS = [
+    { id: 'gas', name: '瓦斯爐' },
+    { id: 'wok', name: '快炒爐' },
+    { id: 'steam', name: '蒸籠灶' },
+    { id: 'pro', name: '專業爐台' },
+  ];
+  const stoveTier = (id) => Math.max(0, STOVE_TIERS.findIndex((t) => t.id === id));
 
-  /** 熟練度：累積烹飪次數 → 1~5 級。每升一級 +8% 售價、-5% 烹飪時間。 */
-  const MASTERY_STEPS = [0, 8, 25, 60, 120];
+  /** 熟練度：累積烹飪次數 → 1~6 級（6 級＝大師）。每升一級 +8% 售價、-5% 烹飪時間。 */
+  const MASTERY_STEPS = [0, 8, 25, 60, 120, 250];
   function masteryLevel(cooked) {
     let lv = 1;
     for (let i = 1; i < MASTERY_STEPS.length; i++) if (cooked >= MASTERY_STEPS[i]) lv = i + 1;
     return lv;
   }
+  const MASTERY_MAX = MASTERY_STEPS.length;
+
+  /* ───────── 菜單、進貨與庫存 ─────────
+   * 每間店從學會的菜裡挑最多 menuMax 道上架；客人只會點上架、有庫存、爐灶煮得動的菜。
+   * 每天 deliveryHour 點固定到貨：依每道菜的「每日進貨量」進貨（付食材成本），庫存不會過期、賣完為止；
+   * 倉儲容量 = base + 冰箱（冷藏設備）的容量，進貨超過容量的部分不進（也不付錢）。 */
+  const STOCK = { menuMax: 20, deliveryHour: 10, base: 40, startQty: 30, newDishQty: 10, creditQty: 20, orderMax: 999 };
+
+  /* ───────── 成就 ─────────
+   * 蒐集、單品、類別、大師。獎勵是金幣；類別精通多一項永久加成（該類售價 +5%），集滿全部大師有全店加成。 */
+  const ACHIEVEMENTS = [];
+  for (const [n, reward] of [[10, 500], [25, 3000], [50, 20000], [75, 80000], [100, 300000]]) ACHIEVEMENTS.push({ id: 'learn' + n, group: '蒐集', name: `收藏家・${n}`, desc: `學會 ${n} 道菜`, type: 'learn', n, reward });
+  for (const c of DISH_CATS) {
+    ACHIEVEMENTS.push({ id: 'catlearn_' + c.id, group: '類別', name: `${c.name}大全`, desc: `學會所有「${c.name}」`, type: 'catlearn', cat: c.id, n: 10, reward: 5000 });
+    ACHIEVEMENTS.push({ id: 'catmaster_' + c.id, group: '類別', name: `${c.name}精通`, desc: `「${c.name}」每道菜熟練度都達 3 級（烹飪 25 次）`, type: 'catmaster', cat: c.id, n: 10, reward: 20000, perk: { priceCat: c.id, price: 0.05 }, perkText: `「${c.name}」售價 +5%` });
+  }
+  for (const [n, reward] of [[100, 1500], [500, 8000], [2000, 60000]]) ACHIEVEMENTS.push({ id: 'cook' + n, group: '單品', name: `千錘百鍊・${n}`, desc: `同一道菜烹飪 ${n} 次`, type: 'cook', n, reward });
+  for (const [n, reward] of [[1, 10000], [5, 30000], [20, 150000], [50, 500000]]) ACHIEVEMENTS.push({ id: 'master' + n, group: '大師', name: n === 1 ? '第一位大師' : `${n} 道大師菜`, desc: `${n} 道菜達到熟練度 6 級（烹飪 ${MASTERY_STEPS[MASTERY_MAX - 1]} 次）`, type: 'master', n, reward });
+  ACHIEVEMENTS.push({ id: 'grand', group: '大師', name: '百味宗師', desc: '100 道菜全部達到熟練度 6 級', type: 'master', n: 100, reward: 2000000, perk: { price: 0.1, cook: 0.05 }, perkText: '全部菜色售價 +10%、烹飪時間 −5%' });
+  const achievements = Object.fromEntries(ACHIEVEMENTS.map((a) => [a.id, a]));
 
   /* ───────── 家具 ───────── */
   // cat: table 桌 / chair 椅 / stove 爐灶 / decor 裝飾 / func 功能
@@ -50,14 +67,16 @@
     { id: 'chair_red', name: '紅絨椅', cat: 'chair', w: 1, h: 1, price: 600, level: 8, appeal: 5, desc: '紅絲絨包覆的高背椅。' },
     { id: 'chair_gold', name: '金邊皇座', cat: 'chair', w: 1, h: 1, price: 2400, level: 13, appeal: 11, desc: '用餐也要有王者風範。' },
     // 爐灶
-    { id: 'stove_gas', name: '瓦斯爐', cat: 'stove', w: 1, h: 1, price: 150, level: 1, appeal: 0, speed: 1.0, desc: '基本款爐灶。' },
-    { id: 'stove_wok', name: '快炒爐', cat: 'stove', w: 1, h: 1, price: 700, level: 4, appeal: 1, speed: 1.25, desc: '大火快炒，烹飪速度 ×1.25。' },
-    { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, desc: '蒸氣十足，烹飪速度 ×1.5。' },
-    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, desc: '專業餐廳等級，烹飪速度 ×1.85。' },
+    { id: 'stove_gas', name: '瓦斯爐', cat: 'stove', w: 1, h: 1, price: 150, level: 1, appeal: 0, speed: 1.0, tier: 0, desc: '基本款爐灶（煮得動瓦斯爐等級的菜）。' },
+    { id: 'stove_wok', name: '快炒爐', cat: 'stove', w: 1, h: 1, price: 700, level: 4, appeal: 1, speed: 1.25, tier: 1, desc: '大火快炒，烹飪速度 ×1.25，可以煮需要「快炒爐」的菜。' },
+    { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, tier: 2, desc: '蒸氣十足，烹飪速度 ×1.5，可以煮需要「蒸籠灶」的菜。' },
+    { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, tier: 3, desc: '專業餐廳等級，烹飪速度 ×1.85，什麼菜都煮得動。' },
     // 功能
     { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
     { id: 'sink', name: '洗碗槽', cat: 'func', w: 1, h: 1, price: 300, level: 1, appeal: 0, fn: 'sink', desc: '客人用過的餐具要送到這裡，由員工洗乾淨；沒有乾淨的盤子就不能出餐。多一個洗碗槽，可以讓更多人同時洗碗。' },
-    { id: 'fridge', name: '冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', desc: '食材取用方便，烹飪時間 -6%（最多 3 台生效）。' },
+    { id: 'fridge', name: '小冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', cap: 50, desc: '多放 50 份食材；食材取用方便，烹飪時間 -6%（冰箱類最多 3 台生效）。' },
+    { id: 'fridge_big', name: '雙門冷藏櫃', cat: 'func', w: 1, h: 1, price: 4200, level: 12, appeal: 3, fn: 'fridge', cap: 140, desc: '多放 140 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
+    { id: 'freezer', name: '專業冷凍庫', cat: 'func', w: 1, h: 1, price: 14000, level: 20, appeal: 5, fn: 'fridge', cap: 320, desc: '多放 320 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
     // 裝飾
     { id: 'plant_pot', name: '小盆栽', cat: 'decor', w: 1, h: 1, price: 70, level: 1, appeal: 2, desc: '一抹綠意。' },
     { id: 'lantern', name: '紅燈籠', cat: 'decor', w: 1, h: 1, price: 140, level: 2, appeal: 4, desc: '喜氣洋洋的落地燈籠。' },
@@ -195,7 +214,7 @@
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 5, maxGap: 4 };
+  const GAME_VERSION = { current: 6, maxGap: 5 };
 
   /* ───────── 客流：尖峰與離峰 ───────── */
   // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
@@ -317,7 +336,7 @@
 
   RC.data = {
     DX, DY, DOOR_Y,
-    dishList, dishes, MASTERY_STEPS, masteryLevel,
+    dishList, dishes, DISH_CATS, dishCats, KIND_NAMES, STOVE_TIERS, stoveTier, MASTERY_STEPS, MASTERY_MAX, masteryLevel, STOCK, ACHIEVEMENTS, achievements,
     furnitureList, furniture, FURNITURE_CATS, LEGACY_REFUND,
     floorList, floors, wallList, walls,
     expansions,
