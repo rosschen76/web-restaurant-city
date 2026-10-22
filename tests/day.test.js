@@ -219,11 +219,28 @@ test('值班店長：Lv.10 才能任命、只能一位、不能是掌櫃；可�
   b.level = 10;
   assert.equal(g.assignManager(a.id).ok, true);
   assert.equal(a.manager, true);
-  assert.equal(g.assignManager(b.id).ok, true, '改任命另一位，前一位自動卸任');
+  assert.equal(g.assignManager(b.id).ok, true, '可以再任命第二位');
+  assert.equal(a.manager && b.manager, true, '每間店最多兩位值班店長');
+  assert.equal(g.assignManager(a.id).ok, false, '已經是店長了');
+  assert.equal(g.clearManager(a.id).ok, true, '可以指定解除哪一位');
   assert.equal(a.manager, false);
   assert.equal(b.manager, true);
   assert.equal(g.clearManager().ok, true);
   assert.equal(b.manager, false);
+});
+
+test('值班店長最多 2 位：第三位要先解除一位', () => {
+  const g = mk(14);
+  hire(g, 3);
+  const [, x, y, z] = g.s.staff;
+  [x, y, z].forEach((m) => (m.level = 10));
+  assert.equal(g.assignManager(x.id).ok, true);
+  assert.equal(g.assignManager(y.id).ok, true);
+  const r = g.assignManager(z.id);
+  assert.equal(r.ok, false);
+  assert.ok(r.msg.includes('最多'), r.msg);
+  g.clearManager(x.id);
+  assert.equal(g.assignManager(z.id).ok, true);
 });
 
 test('掌櫃下班後，值班店長接手結帳；兩人都不在就很快自助結帳', () => {

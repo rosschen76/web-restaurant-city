@@ -37,6 +37,7 @@
     staff: { title: '員工', icon: 'person' },
     quest: { title: '任務', icon: 'scroll' },
     settings: { title: '設定', icon: 'gear' },
+    company: { title: '分店', icon: 'shop' },
   };
   const SHOP_TABS = [
     ...D.FURNITURE_CATS.map((c) => ({ id: c.id, name: c.name })),
@@ -69,7 +70,7 @@
       this.bindGame();
       this.bindInput();
       this.refreshHud();
-      if (game.s.over) this.showGameOver();
+      if (game.isOver()) this.showGameOver();
       else if (!game.s.flags.welcomed) this.showWelcome();
       else if (game.s.flags.addedSink && !game.s.flags.sinkToldAt) {
         game.s.flags.sinkToldAt = 1;
@@ -91,9 +92,11 @@
             <div class="bar-label" id="xplabel"></div>
           </div>
         </div>
+        <div class="store-tabs pbox" id="stores" hidden></div>
         <div class="quest-card pbox" id="quest" data-act="open-quest" hidden></div></div>
         <div class="hud-tr">
           <div class="coin-pill pbox" id="coinpill">${ic('coin', 2)}<span id="coins">0</span></div>
+          <button class="btn icon-btn" id="btn-company" data-act="open-company" title="分店" aria-label="分店" hidden>${ic('shop', 2)}</button>
           <button class="btn icon-btn" id="btn-pause" title="暫停／繼續（空白鍵）" aria-label="暫停或繼續"></button>
           <button class="btn icon-btn" id="btn-speed" title="遊戲速度（1 / 2 / 3）">×1</button>
           <button class="btn icon-btn" id="btn-sfx" title="音效開關" aria-label="音效開關"></button>
@@ -131,6 +134,8 @@
         sfx: this.hud.querySelector('#btn-sfx'),
         music: this.hud.querySelector('#btn-music'),
         quest: this.hud.querySelector('#quest'),
+        stores: this.hud.querySelector('#stores'),
+        btnCompany: this.hud.querySelector('#btn-company'),
         warn: this.hud.querySelector('#warn'),
         pauseBadge: this.hud.querySelector('#pause'),
         bottom: this.hud.querySelector('#bottom'),
@@ -160,6 +165,7 @@
       const html = `<span class="star-row" title="${D.STAR_TITLES[stars]}">${glyphs}</span> ${D.STAR_TITLES[stars].split('・')[0]}　魅力 ${Math.floor(this.game.appeal)}${next ? ` / ${next}` : ''}`;
       if (this.el.stars.innerHTML !== html) this.el.stars.innerHTML = html;
       this.updateClock();
+      this.updateStores();
       this.el.xpbar.style.width = (s.level >= D.MAX_LEVEL ? 100 : Math.min(100, (s.xp / need) * 100)) + '%';
       this.setText(this.el.xplabel, s.level >= D.MAX_LEVEL ? '已達最高等級' : `經驗 ${s.xp} / ${need}`);
       this.setText(this.el.speed, '×' + this.game.speed);
@@ -231,7 +237,7 @@
     updateWarn() {
       const g = this.game;
       let msg = '';
-      if (g.s.over) msg = '餐廳已經倒閉了。到「設定 → 存檔」重新開始。';
+      if (g.isOver()) msg = '餐廳已經倒閉了。到「設定 → 存檔」重新開始。';
       else if (g.dayMode && g.isOpen() && !g.anyOnDuty()) msg = '營業時間裡沒有人在班！到「員工 → 排班」調整班表。';
       else if (!g.sinks.length) msg = '沒有洗碗槽！髒餐具沒地方洗，盤子用完就沒辦法出菜了。到「商店」買一個。';
       else if (g.cleanPlates() < 1 && g.dirty.size + g.s.sinkDirty > 0) msg = '乾淨的盤子用完了，等員工洗好碗才能繼續出菜（多買盤子或多請人洗碗）。';
@@ -317,6 +323,91 @@
       this.renderPanel();
     }
 
+    /** 店面切換列（有分店時顯示）與分店按鈕 */
+    updateStores() {
+      const g = this.game;
+      const ss = g.stores();
+      const main = ss[0];
+      const show = ss.length > 1 || main.room.stage >= D.expansions.length - 1;
+      this.el.btnCompany.hidden = !show;
+      const bar = this.el.stores;
+      if (ss.length < 2) {
+        bar.hidden = true;
+        return;
+      }
+      bar.hidden = false;
+      const html = ss.map((x) => `<button class="store-chip ${x === g.s ? 'on' : ''}" data-act="goto-store" data-id="${x.id}" title="${esc(x.name)}">${x.kind === 'main' ? '主店' : esc(x.name)}${x.staff.some((m) => m.boss) ? ' ★' : ''}</button>`).join('');
+      if (bar.dataset.html !== html) {
+        bar.dataset.html = html;
+        bar.innerHTML = html;
+      }
+    }
+
+    /** 玩家搬到另一間店（或分店被關閉）之後：清掉選取、重排版面、重畫面板 */
+    onStoreChanged() {
+      this.cancelPlacing();
+      this.deselect();
+      this.actor = null;
+      this.view.selectedActor = null;
+      this.view.layout();
+      this.dirty = true;
+      this.refreshHud();
+      if (this.panel && PANELS[this.panel.name]) {
+        this.panel.lastHtml = null;
+        this.renderPanel();
+      }
+      this.toast(`現在在「${this.game.s.name}」`, 'good');
+    }
+
+    /** 分店面板：各店概況、前往、開分店、調動員工 */
+    htmlCompany() {
+      const g = this.game;
+      const s = g.s;
+      const infos = g.storeInfos();
+      const sel = (this.panel && this.panel.sel) || {};
+      const brand = g.brandReputation();
+      const cards = infos
+        .map((x) => {
+          const rp = x.report;
+          const rep = `${x.reputation > 0 ? '+' : ''}${x.reputation.toFixed(1)}`;
+          return `<div class="row ${x.active ? 'cur' : ''}"><div class="grow">
+            <div class="nm">${esc(x.name)} <span class="tag ${x.kind === 'main' ? 'gold' : 'blue'}">${x.kind === 'main' ? '主店' : '分店'}</span>${x.hasPlayer ? ' <span class="tag good">你在這裡</span>' : ''}</div>
+            <div class="sub">${'★'.repeat(x.stars)}${'☆'.repeat(D.MAX_STARS - x.stars)}　風評 ${rep}　${x.room.w}×${x.room.h}　員工 ${x.staff} 位</div>
+            <div class="sub">值班店長：${x.managers.length ? esc(x.managers.join('、')) : '<span class="bad">沒有（需要 Lv.' + D.DAY.managerLevel + ' 以上員工）</span>'}</div>
+            ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪 ${fmt(rp.wages)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
+            </div>
+            <div>${x.active ? '' : `<button class="btn small primary" data-act="goto-store" data-id="${x.id}">前往</button>`}
+            ${x.kind === 'branch' ? `<button class="btn small danger" data-act="close-branch" data-id="${x.id}">關閉</button>` : ''}</div></div>`;
+        })
+        .join('');
+      // 開分店
+      const chk = g.branchCheck();
+      const list = chk.checks.map((c) => `<div class="sub ${c.ok ? 'good' : 'bad'}">${c.ok ? '✔' : '✘'} ${esc(c.text)}</div>`).join('');
+      const opts = chk.eligible.map((m) => `<option value="${m.id}" ${+sel.staff === m.id ? 'selected' : ''}>${esc(m.name)}　Lv.${m.level}　能力 ${g.abilityOf(m).toFixed(2)}</option>`).join('');
+      const nextNo = infos.length;
+      const nameVal = sel.name != null ? sel.name : `分店 ${nextNo}`;
+      const open = `<div class="section-title">開分店（第 ${nextNo} 間，開店資金 ${ic('coin', 1)}${fmt(chk.cost)}）</div>${list}
+        <div class="sched-row">店長 <select data-co="staff" aria-label="分店店長">${opts || '<option value="">（沒有人選）</option>'}</select></div>
+        <div class="sched-row">店名 <input type="text" maxlength="${D.BRANCH.nameMax}" value="${esc(nameVal)}" data-co="name" aria-label="分店名稱"><button class="btn small primary" data-act="open-branch" ${chk.ok ? '' : 'disabled'}>開設分店</button></div>`;
+      // 調動員工
+      const others = infos.filter((x) => !x.active);
+      const mine = s.staff.filter((m) => !m.boss);
+      let xfer = '';
+      if (others.length && mine.length) {
+        const so = mine.map((m) => `<option value="${m.id}" ${+sel.xstaff === m.id ? 'selected' : ''}>${esc(m.name)}　Lv.${m.level}${m.manager ? '（店長）' : ''}</option>`).join('');
+        const to = others.map((x) => `<option value="${x.id}" ${+sel.xto === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+        xfer = `<div class="section-title">調動員工（從「${esc(s.name)}」）</div>
+          <div class="sched-row"><select data-co="xstaff" aria-label="要調動的員工">${so}</select> 調到 <select data-co="xto" aria-label="調去的店">${to}</select><button class="btn small" data-act="xfer-staff">調動</button></div>
+          <div class="sub">調走店長後，這間店會自動改由 Lv.${D.DAY.managerLevel} 以上、綜合能力最強的員工接任。</div>`;
+        if (sel.xstaff == null) sel.xstaff = mine[0].id;
+        if (sel.xto == null) sel.xto = others[0].id;
+        if (this.panel) this.panel.sel = { ...sel };
+      }
+      return `<div class="sub" style="margin:0 3px 6px">公司共有 <b>${infos.length}</b> 間店，品牌聲譽 <b>${brand > 0 ? '+' : ''}${brand.toFixed(1)}</b>（各店風評的平均，會影響每間店的客流）。金幣、等級、菜單、倉庫與任務是整個公司共用；每間店的格局、員工、風評、魅力各自獨立。</div>
+        <div class="sub" style="margin:0 3px 6px">你同一時間只待在一間店，其他店由值班店長主持：切換店面與每天午夜才補算（客流約 ${Math.round(D.BRANCH.awayFlow * 100)}%）。</div>
+        ${cards}${xfer}${open}`;
+    }
+
     /** 遊戲時鐘與風評 */
     updateClock() {
       const g = this.game;
@@ -375,13 +466,14 @@
         case 'menu': html = this.htmlMenu(); break;
         case 'staff': tabs = [{ id: 'crew', name: '員工' }, { id: 'hire', name: '招聘' }, { id: 'sched', name: '排班' }]; html = p.tab === 'sched' ? this.htmlSchedule() : p.tab === 'hire' ? this.htmlRecruit() : this.htmlStaff(); break;
         case 'quest': html = this.htmlQuests(); break;
+        case 'company': html = this.htmlCompany(); break;
         case 'settings': tabs = [{ id: 'main', name: '一般' }, { id: 'stats', name: '統計' }, { id: 'data', name: '存檔' }]; html = this.htmlSettings(p.tab); break;
         default:
       }
       const tabsHtml = tabs ? `<div class="tabs">${tabs.map((t) => `<button class="tab ${t.id === p.tab ? 'on' : ''}" data-act="tab" data-tab="${t.id}">${t.name}</button>`).join('')}</div>` : '';
       if (slot.innerHTML !== tabsHtml) slot.innerHTML = tabsHtml;
       // 文字輸入框正在編輯時不要重繪，避免失去焦點
-      if (p.name === 'settings' && body.contains(document.activeElement) && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+      if ((p.name === 'settings' || p.name === 'company') && body.contains(document.activeElement) && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
       // 內容沒變就不要重繪：重繪會讓正在按下的按鈕被換掉，點擊就會丟失
       if (p.lastHtml === html && p.lastTab === p.tab) return;
       p.lastHtml = html;
@@ -556,7 +648,7 @@
             <div class="sub raise-row">加薪 <input type="range" min="0" max="${D.RAISE.max}" step="1" value="${m.raise || 0}" data-raise="${m.id}" aria-label="${esc(m.name)}的加薪百分比"><b data-raise-label>${m.raise || 0}%</b></div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
-            ${m.manager ? `<button class="btn small" data-act="clear-manager">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
+            ${m.manager ? `<button class="btn small" data-act="clear-manager" data-id="${m.id}">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
             <button class="btn small danger" data-act="fire" data-id="${m.id}">解雇</button></div></div>`;
       };
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
@@ -766,7 +858,7 @@
     }
 
     showGameOver() {
-      const o = this.game.s.over;
+      const o = this.game.stores()[0].over;
       if (!o) return;
       const why = o.reason === 'reputation' ? `餐廳的風評連續 ${D.REPUTATION.loseDays} 天跌到谷底（${D.REPUTATION.min}），客人再也不願意上門了。` : '餐廳無法再經營下去了。';
       this.modal(`<div class="lvup"><h2 style="font-size:22px">餐廳倒閉了…</h2>
@@ -857,6 +949,41 @@
         case 'open-inv': this.openPanel('inv'); A.sfx('click'); break;
         case 'open-menu': this.openPanel('menu'); A.sfx('click'); break;
         case 'open-staff': this.openPanel('staff'); A.sfx('click'); break;
+        case 'open-company': this.openPanel('company'); A.sfx('click'); break;
+        case 'goto-store': {
+          if (this.edit) this.setEdit(false);
+          const r = res(g.switchStore(+id), 'buy');
+          if (r.ok) this.closePanel(true);
+          break;
+        }
+        case 'open-branch': {
+          const q = (k) => (this.panel && this.panel.overlay ? this.panel.overlay.querySelector(`[data-co=${k}]`) : null);
+          const r = res(g.openBranch(+(q('staff') || {}).value, (q('name') || {}).value), 'buy');
+          if (r.ok) {
+            this.panel.sel = {};
+            this.panel.lastHtml = null;
+            this.renderPanel();
+          }
+          break;
+        }
+        case 'xfer-staff': {
+          const q = (k) => (this.panel && this.panel.overlay ? this.panel.overlay.querySelector(`[data-co=${k}]`) : null);
+          const r = res(g.transferStaff(+(q('xstaff') || {}).value, +(q('xto') || {}).value), 'click');
+          if (r.ok) {
+            this.panel.sel = { ...(this.panel.sel || {}), xstaff: null };
+            this.panel.lastHtml = null;
+            this.renderPanel();
+          }
+          break;
+        }
+        case 'close-branch': {
+          const st = g.stores().find((x) => x.id === +id);
+          if (st) this.confirm(`確定要關閉分店「${st.name}」嗎？員工會回到主店、家具收進倉庫。`, () => {
+            res(g.closeBranch(+id, 'manual'), 'click');
+            this.openPanel('company');
+          });
+          break;
+        }
         case 'open-quest': this.openPanel('quest'); A.sfx('click'); break;
         case 'open-settings': this.openPanel('settings'); A.sfx('click'); break;
         case 'toggle-edit': A.sfx('click'); this.setEdit(!this.edit); break;
@@ -901,7 +1028,7 @@
         }
         case 'auto-sched': res(g.setAutoSchedule(!g.s.schedule.auto), 'click'); break;
         case 'set-manager': res(g.assignManager(+id), 'buy'); break;
-        case 'clear-manager': res(g.clearManager(), 'click'); break;
+        case 'clear-manager': res(g.clearManager(id != null ? +id : undefined), 'click'); break;
         case 'boss-rename': this.showBossRename(true); A.sfx('click'); break;
         case 'boss-save': {
           const v = document.getElementById('bn2');
@@ -1264,6 +1391,11 @@
       });
       // 設定裡的音量滑桿
       document.body.addEventListener('input', (e) => {
+        const co = e.target.closest && e.target.closest('[data-co]');
+        if (co && this.panel && this.panel.name === 'company') {
+          this.panel.sel = { ...(this.panel.sel || {}), [co.dataset.co]: co.value };
+          return;
+        }
         const rz = e.target.closest && e.target.closest('[data-raise]');
         if (rz) {
           const lab = rz.parentElement.querySelector('[data-raise-label]');
@@ -1281,6 +1413,11 @@
         this.persistAudio();
       });
       document.body.addEventListener('change', (e) => {
+        const co = e.target.closest && e.target.closest('[data-co]');
+        if (co && this.panel && this.panel.name === 'company') {
+          this.panel.sel = { ...(this.panel.sel || {}), [co.dataset.co]: co.value };
+          return;
+        }
         const rz = e.target.closest && e.target.closest('[data-raise]');
         if (rz) {
           const r = this.game.setRaise(+rz.dataset.raise, +rz.value);
@@ -1428,6 +1565,11 @@
     /* ───────── 每幀 ───────── */
 
     update(dt) {
+      if (this._store !== this.game.s) {
+        const first = this._store === undefined;
+        this._store = this.game.s;
+        if (!first) this.onStoreChanged();
+      }
       const s = this.game.s;
       // 金幣數字滾動
       if (this.coinShown !== s.coins) {
