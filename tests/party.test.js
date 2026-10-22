@@ -298,3 +298,52 @@ test('兩張空桌離太遠就不併桌', () => {
   g.seatQueue();
   assert.deepEqual(g.queue, [trio]);
 });
+
+/* ───────── 候位原因 ───────── */
+
+test('候位原因：沒人候位回傳 null；有空桌又能入座也不算原因', () => {
+  const g = mk(TWO_TABLES);
+  assert.equal(g.queueReason(), null);
+  g.queue.push(party(g, 2));
+  assert.equal(g.queueReason(), null, '有空桌、出餐也來得及：馬上就會入座');
+});
+
+test('候位原因 admit：店裡有空位，但在等點餐／上菜的客人已達員工的照顧上限', () => {
+  const g = mk(TWO_TABLES);
+  const cap = Math.max(D.FLOW.admitMin, Math.ceil(g.crew.filter((m) => m.onDuty).length * D.FLOW.admitPerStaff));
+  for (let i = 0; i < cap; i++) g.customers.push({ id: 900 + i, party: 900, state: 'wait_food', seat: -1 });
+  g.queue.push(party(g, 2));
+  const r = g.queueReason();
+  assert.equal(r.code, 'admit');
+  assert.equal(r.cap, cap);
+  assert.equal(r.pending, cap);
+  assert.ok(r.staff >= 1);
+  assert.ok(g.seats.filter((s) => !g.seatTaken.has(s.uid)).length > 0, '確實還有空位');
+});
+
+test('候位原因 dirty／full／small／reserved', () => {
+  // 空桌上的餐具還沒收
+  const a = mk(TWO_TABLES);
+  a.canAdmit = () => true;
+  for (const t of a.tables.values()) a.dirty.set(t.uid, { x: 0, y: 0, plates: 1, claimedBy: null });
+  a.queue.push(party(a, 2));
+  const ra = a.queueReason();
+  assert.equal(ra.code, 'dirty');
+  assert.equal(ra.dirty, 2);
+  // 所有桌子都有人坐
+  const b = mk(TWO_TABLES);
+  for (const t of b.tables.values()) b.tableParty.set(t.uid, 999);
+  b.queue.push(party(b, 2));
+  assert.equal(b.queueReason().code, 'full');
+  // 沒有夠大的桌子（最大 2 人桌，又找不到相鄰的空桌可併）
+  const c = mk([STOVE, ['table_wood', 5, 3], ['chair_stool', 4, 3], ['chair_stool', 6, 3, 2]]);
+  c.queue.push(party(c, 4));
+  assert.equal(c.queueReason().code, 'small');
+  assert.equal(c.queueReason().max, 2);
+  // 替 3～4 人的組保留大桌：2 人桌都有人，大桌空著卻不給 1～2 人坐
+  const d = mk(SMALLS_AND_BIG);
+  d.canAdmit = () => true;
+  for (const t of d.tables.values()) if (t.seats.length === 2) d.tableParty.set(t.uid, 999);
+  d.queue.push(party(d, 2), party(d, 4));
+  assert.equal(d.queueReason().code, 'reserved');
+});

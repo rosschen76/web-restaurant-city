@@ -267,3 +267,4 @@ select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: va
 .clockline { white-space: nowrap; min-width: 21.5em; }
 .clockline .doom { display: block; }
 @media (max-width: 560px) { .clockline { white-space: normal; min-width: 0; } }
+.warn-banner.below-pause { top: calc(106px + var(--safe-t)); }
