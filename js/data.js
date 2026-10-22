@@ -123,7 +123,9 @@
   /** 下一顆星需要的魅力；已經三星則回傳 null */
   const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
   const maxStaffForLevel = (lv) => Math.min(8, 1 + (lv >= 2) + (lv >= 4) + (lv >= 6) + (lv >= 9) + (lv >= 12) + (lv >= 15) + (lv >= 18));
-  const HIRE_BASE = [0, 200, 600, 1500, 3500, 8000, 16000, 30000];
+  // 員工領日薪（每天午夜發放，不是一次性買斷）：依「現有人數」決定基本日薪，再乘上應徵者能力
+  const WAGE_BASE = [0, 50, 80, 120, 180, 260, 360, 480];
+  const WAGE_QUIT_DAYS = 3; // 連續這麼多天領不到薪水，員工就會離職
   const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430]; // 最高 10 級
   const FEED_COST = 15;
   const FEED_AMOUNT = 50;
@@ -177,12 +179,13 @@
     shiftHours: 8, // 友善職場：每位員工每天最多上班 8 小時（硬性規定，不能超時）
     restFullHours: 2, // 離開崗位休息滿 2 小時，體力自動恢復
     managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
+    closeOvertimeMin: 120, // 打烊後還有客人或餐具沒收洗完，在班的員工留下收店，最多加班這麼久（分鐘）
   };
 
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 2, maxGap: 2 };
+  const GAME_VERSION = { current: 3, maxGap: 2 };
 
   /* ───────── 風評 ───────── */
   // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
@@ -232,7 +235,7 @@
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,
     STAR_STEPS, MAX_STARS, STAR_TITLES, starsForAppeal, nextStarAppeal,
-    maxStaffForLevel, HIRE_BASE, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
+    maxStaffForLevel, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
     PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION,

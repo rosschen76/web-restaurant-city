@@ -199,6 +199,12 @@ test('經濟平衡：自動玩 20 分鐘（有結帳、會買東西、會洗碗�
     return out;
   };
   let t = 0;
+  let blockUntil = 0;
+  // 擺不下就先放棄一陣子：反覆「放下又收回」會一直重算版面，把正在入座的客人趕走（真實遊戲裡裝潢時時間是暫停的）
+  const tryPlace = (ids, spots) => {
+    if (t < blockUntil) return;
+    if (!placeSafe(ids, spots)) blockUntil = t + 40;
+  };
   const log = [];
   while (t < 1200) {
     g.update(0.1);
@@ -207,13 +213,13 @@ test('經濟平衡：自動玩 20 分鐘（有結帳、會買東西、會洗碗�
       const s = g.s;
       const cur = g.currentQuest();
       if (cur && cur.done) g.claimQuest();
-      if (s.coins >= 200 && s.staff.length - 1 < D.maxStaffForLevel(s.level) && s.candidates[0]) g.hire(0);
-      else if (g.stoves.length < Math.ceil(s.staff.length * 0.8) && s.coins >= 150) placeSafe(['stove_gas'], freeTiles().map(([x, y]) => [['stove_gas', x, y]]));
-      else if (g.sinks.length < Math.ceil(s.staff.length / 3) && s.coins >= 300) placeSafe(['sink'], freeTiles().map(([x, y]) => [['sink', x, y]]));
+      if (s.coins >= 400 && s.staff.length - 1 < D.maxStaffForLevel(s.level) && s.candidates[0]) g.hire(0);
+      else if (g.stoves.length < Math.ceil(s.staff.length * 0.8) && s.coins >= 150) tryPlace(['stove_gas'], freeTiles().map(([x, y]) => [['stove_gas', x, y]]));
+      else if (g.sinks.length < Math.ceil(s.staff.length / 3) && s.coins >= 300) tryPlace(['sink'], freeTiles().map(([x, y]) => [['sink', x, y]]));
       else if (g.stoves.length >= Math.ceil(s.staff.length * 0.8) && g.seats.length < s.staff.length * 4 + 2 && s.coins >= 105) {
         const spots = [];
         for (const [x, y] of freeTiles()) spots.push([['table_wood', x, y], ['chair_stool', x - 1, y], ['chair_stool', x + 1, y, 2]]);
-        placeSafe(['table_wood'], spots);
+        tryPlace(['table_wood'], spots);
       }
       if (s.level >= 2 && !s.dishes.fantuan && s.coins >= 150) g.learnDish('fantuan');
       if (s.level >= 3 && !s.dishes.luroufan && s.coins >= 400) g.learnDish('luroufan');

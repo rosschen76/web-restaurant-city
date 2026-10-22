@@ -117,8 +117,8 @@ test('每位員工每天最多上班 8 小時：連續多天量測在班時間�
   });
   let worst = 0;
   for (const v of minutes.values()) worst = Math.max(worst, v);
-  // 班是 8 小時；下班時若手上還有事，最多再做 30 分鐘就強制下班
-  assert.ok(worst <= 8 * 60 + 30 + 1, '最長單日在班 ' + (worst / 60).toFixed(2) + ' 小時');
+  // 班是 8 小時；打烊後客人與餐具沒收完時留下收店，最多再加班 2 小時（見下方收店測試）
+  assert.ok(worst <= 8 * 60 + D.DAY.closeOvertimeMin + 1, '最長單日在班 ' + (worst / 60).toFixed(2) + ' 小時');
   assert.ok(worst >= 7 * 60, '員工確實有上班');
 });
 
@@ -128,8 +128,11 @@ test('下班的人走出店門，上班時從門口進來', () => {
   const events = [];
   g.on('clockout', (e) => events.push('out'));
   g.on('clockin', (e) => events.push('in'));
-  runHours(g, 8.6);
-  assert.equal(boss.onDuty, false, '17:00 過後掌櫃下班');
+  runHours(g, 8); // 17:00 打烊
+  let guard = 0;
+  while (boss.onDuty && guard++ < 3000) g.update(0.1); // 客人用完餐、餐具洗完（最多加班 2 小時）才下班
+  assert.equal(boss.onDuty, false, '收完店掌櫃下班');
+  runHours(g, 0.1);
   runHours(g, 15.5);
   assert.equal(boss.onDuty, true, '隔天 9 點又上班');
   assert.deepEqual(events.slice(0, 2), ['out', 'in']);
@@ -284,4 +287,79 @@ test('員工等級上限 10，達到 10 級時提示可任命值班店長', () =
   rec.xp = 99999;
   g.gainStaffXp(rec);
   assert.equal(rec.level, 10, '不會超過 10 級');
+});
+
+/* ───────── 打烊收店：客人服務完、餐具洗完，員工才下班 ───────── */
+
+/** 跑到 17:00 打烊（客人已經入座、桌上有餐點）；回傳遊戲 */
+function untilClose(seed, mut) {
+  const g = mk(seed, mut);
+  hire(g, 1);
+  g.setBusinessHours(9, 17);
+  g.setAutoSchedule(false);
+  g.s.staff.forEach((m) => (m.shift = 9)); // 全部 9:00~17:00
+  runHours(g, 8); // 9:00 → 17:00
+  return g;
+}
+
+test('打烊時店裡還有客人：在班的員工留下來，客人吃完、結帳、桌子與餐具都收洗完才下班', () => {
+  let g, seenBusy = false;
+  for (const seed of [21, 22, 23, 24, 25]) {
+    g = untilClose(seed);
+    if (g.closingWork()) {
+      seenBusy = true;
+      break;
+    }
+  }
+  assert.ok(seenBusy, '打烊時應該還有客人或餐具（這組種子才能測到收店）');
+  assert.equal(g.isOpen(), false);
+  assert.ok(g.crew.every((m) => m.onDuty), '班表已經到點，但店裡還有事，大家都還在');
+  assert.ok(g.crew.every((m) => !m.ending), '收店的員工仍然接手新的工作（收桌子、洗碗、結帳），不是準備下班');
+  let guard = 0;
+  while (g.crew.some((m) => m.onDuty) && guard++ < 36000) {
+    // 還有客人時，沒有人可以先走
+    if (g.customers.length > 0) assert.ok(g.crew.some((m) => m.onDuty && (m.boss || m.rec.manager)), '客人還沒結完帳，掌櫃還在');
+    g.update(0.1);
+  }
+  assert.ok(guard < 36000, '最後所有人都下班了');
+  assert.equal(g.customers.length, 0, '客人全部服務完才下班');
+  assert.equal(g.dirty.size, 0, '桌上沒有留下餐具');
+  assert.equal(g.s.sinkDirty, 0, '洗碗槽裡的髒盤子洗完了');
+  assert.equal(g.crew.reduce((n, m) => n + (m.carryPlates || 0), 0), 0);
+  assert.equal(g.cleanPlates(), g.plateTotal(), '盤子全部是乾淨的');
+});
+
+test('收店加班有上限：最多 2 小時，之後一定下班（不會被卡住）', () => {
+  const g = untilClose(26);
+  // 製造一個永遠做不完的狀況：洗碗槽被移走，髒盤子洗不掉
+  for (const it of [...g.s.items]) if (it.id === 'sink') g.storeItem(it.uid);
+  g.s.sinkDirty = 5;
+  const t0 = g.absMin();
+  let guard = 0;
+  while (g.crew.some((m) => m.onDuty) && guard++ < 100000) g.update(0.1);
+  const used = g.absMin() - t0;
+  assert.ok(g.crew.every((m) => !m.onDuty), '加班到上限就下班');
+  assert.ok(used <= D.DAY.closeOvertimeMin + 5, `加班 ${used.toFixed(0)} 分鐘`);
+});
+
+test('收店只在已經打烊後才生效：營業中班表結束照樣下班（每班 8 小時）', () => {
+  const g = mk(28);
+  hire(g, 1);
+  g.setBusinessHours(8, 22);
+  g.setAutoSchedule(false);
+  g.s.staff.forEach((m) => (m.shift = 8)); // 8:00~16:00，營業到 22:00
+  runHours(g, 0.1);
+  g.crew.forEach((m) => assert.equal(m.onDuty, true));
+  runHours(g, 8.8); // 約 16:50
+  assert.equal(g.isOpen(), true);
+  assert.equal(g.closingWork(), false, '營業中不算收店');
+  assert.ok(g.crew.every((m) => !m.onDuty), '還在營業時間，班表到了照樣下班');
+});
+
+test('打烊後新客人不會再進門，候位的客人也離開；店裡的客人照常服務完', () => {
+  const g = untilClose(29);
+  const nBefore = g.nextCid;
+  run(g, 60);
+  assert.equal(g.nextCid, nBefore, '打烊後沒有新客人');
+  assert.equal(g.queue.length, 0);
 });

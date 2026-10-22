@@ -392,7 +392,7 @@ await scenario('排班：營業時間、手動排班（每班 8 小時）、自�
   await page.click('[data-act=set-manager]');
   assert.equal(await G(page, () => window.__game.game.s.staff.filter((m) => m.manager).length), 1);
   await page.click('[data-tab=sched]');
-  assert.ok((await page.locator('.win-body').innerText()).includes('每天最多上班 8 小時'));
+  assert.ok((await page.locator('.win-body').innerText()).includes('每天排定上班 8 小時') && (await page.locator('.win-body').innerText()).includes('留下來收店'));
   await page.selectOption('[data-sel=open]', '10');
   await page.selectOption('[data-sel=close]', '20');
   assert.deepEqual(await G(page, () => { const s = window.__game.game.s.schedule; return [s.open, s.close]; }), [10, 20]);
@@ -404,6 +404,31 @@ await scenario('排班：營業時間、手動排班（每班 8 小時）、自�
   assert.equal(bars, 2 * 8, '兩個人、每人 8 小時');
   const w = await G(page, () => { const b = document.querySelector('.win-body'); return b.scrollWidth - b.clientWidth; });
   assert.ok(w <= 0, '排班頁不應出現水平捲軸');
+});
+
+await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工分頁顯示日薪與欠薪；午夜發薪', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 5000; g.s.level = 5; });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  const tabs = await page.locator('.tabs .tab').allInnerTexts();
+  assert.deepEqual(tabs, ['員工', '招聘', '排班']);
+  assert.equal(await page.locator('[data-act=hire]').count(), 0, '員工分頁不再放應徵者');
+  await page.click('[data-tab=hire]');
+  assert.equal(await page.locator('[data-act=hire]').count(), 3);
+  const txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('日薪') && txt.includes('不用先付錢'), txt);
+  await page.click('[data-act=hire] >> nth=0');
+  assert.equal(await G(page, () => window.__game.game.s.coins), 5000, '雇用不扣金幣');
+  assert.equal(await G(page, () => window.__game.game.s.staff.length), 2);
+  assert.ok((await G(page, () => window.__game.game.s.staff[1].wage)) > 0);
+  await page.click('[data-tab=crew]');
+  assert.ok((await page.locator('.win-body').innerText()).includes('日薪'), '員工分頁顯示日薪');
+  // 午夜發薪
+  const wage = await G(page, () => window.__game.game.s.staff[1].wage);
+  const before = await G(page, () => { const g = window.__game; g.game.setBusinessHours(1, 2); g.game.s.clock = 1439.9; return g.game.s.coins; });
+  await page.waitForFunction(() => window.__game.game.s.day >= 2, null, { timeout: 8000 });
+  const after = await G(page, () => window.__game.game.s.coins);
+  assert.ok(before - after >= wage - 5 && before - after <= wage + 5, `應扣一天日薪 ${wage}：${before} → ${after}`);
 });
 
 await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {

@@ -27,10 +27,11 @@
     return { name, look: makeLook(rng), speed, skill };
   }
 
-  function hireCost(cand, staffCount) {
-    const base = D.HIRE_BASE[Math.min(staffCount, D.HIRE_BASE.length - 1)];
+  /** 日薪：依雇用當下的人數（含掌櫃）決定基本薪資，能力越強越貴；店掌櫃不領薪水 */
+  function dailyWage(cand, staffCount) {
+    const base = D.WAGE_BASE[Math.min(staffCount, D.WAGE_BASE.length - 1)];
     const q = (cand.speed + cand.skill) / 2;
-    return Math.round((base * q * q) / 10) * 10;
+    return Math.round((base * q * q) / 5) * 5;
   }
 
   function newStaff(id, cand) {
@@ -46,6 +47,8 @@
       boss: !!cand.boss,
       shift: Number.isInteger(cand.shift) ? cand.shift : D.DAY.defaultOpen, // 上班時間（整點）：從這個鐘點起連續 8 小時
       manager: false, // 值班店長（Lv.10 起可任命）
+      wage: cand.boss ? 0 : Math.max(0, Math.floor(+cand.wage || 0)), // 日薪（每天午夜發放）
+      unpaid: 0, // 連續領不到薪水的天數
     };
   }
 
@@ -203,6 +206,8 @@
         boss: !!m.boss,
         shift: Math.floor(num(m.shift, D.DAY.defaultOpen, 0, 23)),
         manager: !!m.manager,
+        wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1, // -1：舊存檔沒有日薪，稍後補上
+        unpaid: Math.floor(num(m.unpaid, 0, 0, D.WAGE_QUIT_DAYS)),
       });
       maxId = Math.max(maxId, id);
     }
@@ -216,6 +221,8 @@
         if (m.manager && (m.boss || m.level < D.DAY.managerLevel || seenManager)) m.manager = false;
         if (m.manager) seenManager = true;
       }
+      // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
+      staff.forEach((m, i) => (m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i)));
       s.staff = staff;
       s.nextStaffId = maxId + 1;
     }
@@ -350,5 +357,5 @@
     }
   }
 
-  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, hireCost });
+  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, dailyWage });
 })(typeof globalThis !== 'undefined' ? globalThis : window);
