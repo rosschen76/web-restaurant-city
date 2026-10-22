@@ -459,6 +459,19 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
   assert.ok(before - after >= wage + welfare - 5 && before - after <= wage + welfare + 5, `應扣一天日薪 ${wage} 與福利金 ${welfare}：${before} → ${after}`);
 });
 
+await scenario('左上角資訊框寬度固定：風評 +9.9 → +10.0、營業狀態與尖峰字樣改變時不會忽寬忽窄', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const widths = [];
+  for (const [rep, day, clock, low] of [[9.9, 83, 21.4 * 60, 0], [10, 83, 21.4 * 60, 0], [-10, 83, 21.4 * 60, 0], [10, 1, 9 * 60, 0], [-10, 999, 12.5 * 60, 15], [3.5, 5, 14 * 60, 0]]) {
+    widths.push(await G(page, ([rep, day, clock, low]) => {
+      const g = window.__game.game; g.s.reputation = rep; g.s.day = day; g.s.clock = clock; g.s.lowDays = low;
+      window.__game.ui.updateClock();
+      return Math.round(document.querySelector('.hud-tl').getBoundingClientRect().width);
+    }, [rep, day, clock, low]));
+  }
+  assert.equal(new Set(widths).size, 1, '各種情況下框一樣寬：' + widths);
+});
+
 await scenario('客流尖峰／離峰：HUD 顯示時段，排班頁有客流圖與尖峰時段', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => { window.__game.game.s.clock = 12.5 * 60; });
