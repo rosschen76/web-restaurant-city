@@ -518,7 +518,7 @@ await scenario('分店：開分店、切換店面、搬回主店、存檔後重�
   // 前往分店
   await page.click('.store-chip >> nth=1');
   await page.waitForFunction(() => window.__game.game.s.kind === 'branch');
-  assert.ok((await page.locator('#rname').innerText()).includes('東區店'), 'HUD 顯示分店名稱');
+  await page.waitForFunction(() => document.querySelector('#rname').textContent.includes('東區店'), null, { timeout: 4000 });
   assert.equal(await G(page, () => window.__game.game.crew.some((m) => m.boss)), true, '玩家（掌櫃）在分店');
   assert.equal(await G(page, () => window.__game.game.stores()[0].staff.some((m) => m.boss)), false, '主店沒有掌櫃');
   // 存檔後重載：仍然在分店

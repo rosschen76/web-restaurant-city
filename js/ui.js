@@ -953,7 +953,11 @@
         case 'goto-store': {
           if (this.edit) this.setEdit(false);
           const r = res(g.switchStore(+id), 'buy');
-          if (r.ok) this.closePanel(true);
+          if (r.ok) {
+            this.closePanel(true);
+            this._store = g.s;
+            this.onStoreChanged(); // 馬上更新畫面，不等下一幀
+          }
           break;
         }
         case 'open-branch': {
