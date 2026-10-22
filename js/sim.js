@@ -1592,39 +1592,78 @@
     }
 
     /**
-     * 自動排班：把 8 小時的班平均錯開，盡量蓋滿營業時間。
-     * 掌櫃排開店班、值班店長排收店班（兩人都能結帳），其他員工依序補中間的班。
+     * 自動排班：
+     * 1. 先蓋滿營業時間：掌櫃排開店班、值班店長（沒有就等級最高的員工）排收店班，兩人都能結帳；
+     * 2. 多出來的員工中，**等級高的（資深）優先去補尖峰**（客流高、已經排的人少的時段）；
+     * 3. **等級低的（資淺）分成 2～3 個時段**錯開上班，不全部擠在同一個鐘點。
      */
     autoSchedule() {
       const s = this.s;
       const { open, close } = s.schedule;
+      const SH = DAYC.shiftHours;
       const len = close - open;
-      const k = Math.max(1, Math.ceil(len / DAYC.shiftHours));
+      const k = Math.max(1, Math.ceil(len / SH));
       const slots = [];
-      for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - DAYC.shiftHours)) / (k - 1)));
+      for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - SH)) / (k - 1)));
       const slotOrder = k === 1 ? [0] : [0, k - 1, ...Array.from({ length: Math.max(0, k - 2) }, (_, i) => i + 1)];
-      const people = [...s.staff].sort((a, b) => (b.boss ? 2 : b.manager ? 1 : 0) - (a.boss ? 2 : a.manager ? 1 : 0) || a.id - b.id);
+      // 掌櫃、值班店長在前，其餘依等級由高到低
+      const rank = (m) => (m.boss ? 2 : m.manager ? 1 : 0);
+      const people = [...s.staff].sort((a, b) => rank(b) - rank(a) || b.level - a.level || a.id - b.id);
       const count = Array(24).fill(0); // 各鐘點已經排了幾個人
-      const cover = (start) => {
-        for (let j = 0; j < DAYC.shiftHours; j++) count[(start + j) % 24]++;
+      const hoursOf = (st) => {
+        const hs = [];
+        for (let h = Math.max(st, open); h < Math.min(st + SH, close); h++) hs.push(h % 24);
+        return hs;
       };
-      people.forEach((rec, i) => {
-        if (i < k) {
-          rec.shift = ((slots[slotOrder[i]] % 24) + 24) % 24; // 先排滿營業時間
-        } else {
-          // 多出來的人：排在人手最吃緊的尖峰（客流倍率高、已經排的人少）
-          let best = open;
-          let bestScore = -1;
-          for (let st = open; st <= Math.max(open, close - DAYC.shiftHours); st++) {
-            let score = 0;
-            for (let h = Math.max(st, open); h < Math.min(st + DAYC.shiftHours, close); h++) score += D.DEMAND[h % 24] / (1 + count[h % 24]);
-            if (score > bestScore + 1e-9) {
-              bestScore = score;
-              best = st;
-            }
-          }
-          rec.shift = ((best % 24) + 24) % 24;
+      const cover = (st) => {
+        for (let j = 0; j < SH; j++) count[(st + j) % 24]++;
+      };
+      const lastStart = Math.max(open, close - SH);
+      /** 這個起點能補多少「還缺人的需求」：尖峰時段權重高 */
+      const need = (st, peakOnly) => {
+        let score = 0;
+        for (const h of hoursOf(st)) {
+          const peak = D.demandKind(D.DEMAND[h]) === 'peak';
+          if (peakOnly && !peak) continue;
+          score += (peak ? D.DEMAND[h] : D.DEMAND[h] * 0.25) / (1 + count[h]);
         }
+        return score;
+      };
+      // 資淺員工可選的 2～3 個起點：把可排的區間等分
+      const span = lastStart - open;
+      const n = span >= 6 ? 3 : span >= 2 ? 2 : 1;
+      const juniorStarts = [];
+      for (let j = 0; j < n; j++) juniorStarts.push(n === 1 ? open : Math.round(open + (j * span) / (n - 1)));
+      const best = (cands, peakOnly) => {
+        let pick = cands[0];
+        let top = -1;
+        for (const st of cands) {
+          const sc = need(st, peakOnly);
+          if (sc > top + 1e-9) {
+            top = sc;
+            pick = st;
+          }
+        }
+        return pick;
+      };
+      const usedJunior = new Set(); // 資淺員工輪流用掉每個時段，才不會全擠在同一個
+      const allStarts = [];
+      for (let st = open; st <= lastStart; st++) allStarts.push(st);
+      people.forEach((rec, i) => {
+        let st;
+        if (i < k) st = slots[slotOrder[i]]; // 先排滿營業時間
+        else if (rec.level >= DAYC.seniorLevel) st = best(allStarts, true); // 資深：補尖峰
+        else {
+          // 資淺：分成 2～3 個時段，每個時段都用過一輪才重複
+          let cands = juniorStarts.filter((x) => !usedJunior.has(x));
+          if (!cands.length) {
+            usedJunior.clear();
+            cands = juniorStarts;
+          }
+          st = best(cands, false);
+          usedJunior.add(st);
+        }
+        rec.shift = ((st % 24) + 24) % 24;
         cover(rec.shift);
       });
     }

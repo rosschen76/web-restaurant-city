@@ -550,7 +550,7 @@
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
+            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}${m.level >= D.STAFF_XP_STEPS.length ? '・滿級' : ''}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　班別 ${shiftText(m.shift)}</div>
             <div class="sub">日薪 ${ic('coin', 1)}${fmt(m.wage)}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
@@ -644,7 +644,7 @@
           <span class="sub">共 ${sc.close - sc.open} 小時；其餘時間是休息時間，客人不會上門</span></div>
         <div class="section-title">排班</div>
         <div class="sched-row"><button class="btn small ${sc.auto ? 'primary' : ''}" data-act="auto-sched">自動排班：${sc.auto ? '開' : '關'}</button>
-          <span class="sub">${sc.auto ? '開啟時，班表會跟著營業時間與人員自動調整' : '手動排班：自己決定每個人幾點上班'}</span></div>
+          <span class="sub">${sc.auto ? `開啟時，班表會跟著營業時間與人員自動調整：掌櫃開店、值班店長（或等級最高的員工）收店；Lv.${D.DAY.seniorLevel} 以上的資深員工優先補尖峰，等級較低的分成 2～3 個時段錯開上班` : '手動排班：自己決定每個人幾點上班'}</span></div>
         <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天排定上班 ${D.DAY.shiftHours} 小時，離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
         <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、餐具洗完才下班（最多加班 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班。</div>
         <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
