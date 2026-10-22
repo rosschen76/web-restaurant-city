@@ -1042,12 +1042,13 @@
       }
       this.el.bottom.hidden = on;
       this.el.editbar.hidden = !on;
+      this.el.quest.classList.toggle('edit-hide', on); // 裝潢時收起任務卡，別擋住上視圖
       this.updateEditHint();
       this.updatePauseBadge();
     }
 
     updateEditHint() {
-      let t = '點選家具可移動、旋轉、收起或賣出';
+      let t = '上視圖：點選家具可移動、旋轉、收起或賣出';
       if (this.placing) t = '點擊格子放置　R 旋轉　Esc 取消';
       else if (this.view.selectedItem != null) t = '拖曳家具或用工具列操作';
       this.setText(this.el.edithint, t);

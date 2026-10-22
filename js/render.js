@@ -6,6 +6,7 @@
   const D = RC.data;
   const A = RC.artWorld;
   const AP = RC.artPeople;
+  const AT = RC.artTop;
   const { canvas, ctx } = gfx;
 
   const SEATED = ['browse', 'wait_order', 'ordering', 'wait_food', 'eat', 'wait_pay'];
@@ -22,7 +23,8 @@
       this.S = 3;
       this.dpr = 1;
       this.time = 0;
-      this.edit = false;
+      this.top = false; // 上視圖（裝潢模式用）
+      this._edit = false;
       this.ghost = null; // {id, rot, tx, ty, ok}
       this.selectedItem = null; // uid
       this.selectedActor = null; // {kind:'staff'|'customer', id}
@@ -32,6 +34,19 @@
       this.frameDt = 0;
       this.bindGame();
       this.resize();
+      this._ready = true;
+    }
+
+    /** 裝潢模式：視角改成上視圖（俯視），方便對齊格子安排桌椅；離開後恢復等角視圖 */
+    get edit() {
+      return this._edit;
+    }
+    set edit(on) {
+      on = !!on;
+      if (on === this._edit) return;
+      this._edit = on;
+      this.top = on;
+      if (this._ready) this.layout();
     }
 
     bindGame() {
@@ -79,13 +94,17 @@
     /** 依目前餐廳大小決定放大倍率與原點。 */
     layout() {
       const s = this.game.s;
-      const layer = A.roomLayer(s.room.stage, s.room.floor, s.room.wall);
+      const layer = this.top ? AT.room(s.room.stage, s.room.floor, s.room.wall) : A.roomLayer(s.room.stage, s.room.floor, s.room.wall);
+      // 窄螢幕（手機）的 HUD 與裝潢工具列比較高：上視圖多留一些空間，才不會被蓋住
+      const narrow = this.top && this.cssW <= 560;
+      const topUi = narrow ? 150 : this.top ? 96 : TOP_UI;
+      const botUi = narrow ? 150 : BOTTOM_UI;
       const availW = Math.max(200, this.cssW - 12) * this.dpr;
-      const availH = Math.max(160, this.cssH - TOP_UI - BOTTOM_UI) * this.dpr;
-      const raw = Math.min(availW / (layer.c.width + 8), availH / (layer.c.height + 12));
+      const availH = Math.max(160, this.cssH - topUi - botUi) * this.dpr;
+      const raw = Math.min(availW / (layer.c.width + 8), availH / (layer.c.height + (this.top ? 4 : 12)));
       // 高密度螢幕可用 0.5 級距（不均勻幾乎看不出來）；一般螢幕維持整數倍以保持像素銳利
       let S = this.dpr >= 2 ? Math.floor(raw * 2) / 2 : Math.floor(raw);
-      S = Math.max(1, Math.min(4, S));
+      S = Math.max(1, Math.min(this.top ? 6 : 4, S));
       this.S = S;
       const lw = Math.ceil(this.el.width / S);
       const lh = Math.ceil(this.el.height / S);
@@ -96,23 +115,30 @@
         this.lg.imageSmoothingEnabled = false;
       }
       this.layer = layer;
-      const topPx = (TOP_UI * this.dpr) / S;
-      const botPx = (BOTTOM_UI * this.dpr) / S;
+      const topPx = (topUi * this.dpr) / S;
+      const botPx = (botUi * this.dpr) / S;
       const x0 = Math.floor((lw - layer.c.width) / 2);
       const y0 = Math.floor(topPx + (lh - topPx - botPx - layer.c.height) / 2);
       this.x0 = x0;
       this.y0 = y0;
       this.ox = x0 + layer.ox; // tile(0,0) 頂點的邏輯座標
       this.oy = y0 + layer.oy;
-      this.layerKey = s.room.stage + s.room.floor + s.room.wall;
+      this.layerKey = this.roomKey();
+    }
+
+    roomKey() {
+      const r = this.game.s.room;
+      return (this.top ? 'T' : 'I') + r.stage + r.floor + r.wall;
     }
 
     /** 連續格座標 → 邏輯像素 */
     proj(gx, gy) {
+      if (this.top) return [this.ox + gx * AT.T, this.oy + gy * AT.T];
       return [this.ox + (gx - gy) * 16, this.oy + (gx + gy) * 8];
     }
     /** 邏輯像素 → 連續格座標 */
     unproj(lx, ly) {
+      if (this.top) return [(lx - this.ox) / AT.T, (ly - this.oy) / AT.T];
       const px = lx - this.ox;
       const py = ly - this.oy;
       return [(px / 16 + py / 8) / 2, (py / 8 - px / 16) / 2];
@@ -123,7 +149,7 @@
     /** 格座標 → CSS 像素（給 DOM 浮層定位） */
     tileToCss(gx, gy, z) {
       const p = this.proj(gx, gy);
-      return { x: (p[0] * this.S) / this.dpr, y: ((p[1] - (z || 0)) * this.S) / this.dpr };
+      return { x: (p[0] * this.S) / this.dpr, y: ((p[1] - (this.top ? 0 : z || 0)) * this.S) / this.dpr };
     }
     tileAt(cssX, cssY) {
       const [lx, ly] = this.cssToLogical(cssX, cssY);
@@ -164,16 +190,19 @@
       this.frameDt = dt;
       this.stepFx(dt);
       const s = this.game.s;
-      if (this.layerKey !== s.room.stage + s.room.floor + s.room.wall) this.layout();
+      if (this.layerKey !== this.roomKey()) this.layout();
       const g = this.lg;
       const W = this.low.width;
       const H = this.low.height;
       this.drawBackdrop(g, W, H);
       g.drawImage(this.layer.c, this.x0, this.y0);
-      if (this.edit) this.drawGrid(g);
-      this.drawWorld(g);
-      this.drawNight(g, W, H);
-      this.drawFx(g);
+      if (this.top) {
+        this.drawTop(g);
+      } else {
+        this.drawWorld(g);
+        this.drawNight(g, W, H);
+        this.drawFx(g);
+      }
       // 放大輸出
       const out = this.g;
       out.imageSmoothingEnabled = false;
@@ -205,28 +234,45 @@
       g.fillRect(0, H - 6, W, 6);
     }
 
-    diamond(g, px, py, color, fill) {
-      // px,py 為格子頂點
-      if (fill) {
-        gfx.poly(g, [[px, py], [px + 16, py + 8], [px, py + 16], [px - 16, py + 8]], color);
-        return;
+    /* ───────── 上視圖（裝潢模式） ───────── */
+
+    drawTop(g) {
+      const game = this.game;
+      const grid = game.grid;
+      const T = AT.T;
+      const x0 = this.ox;
+      const y0 = this.oy;
+      // 門口前兩格要保持暢通
+      g.fillStyle = 'rgba(255,226,90,0.28)';
+      g.fillRect(x0, y0 + D.DOOR_Y * T, 2 * T, T);
+      // 格線
+      g.fillStyle = 'rgba(255,255,255,0.22)';
+      for (let x = 0; x <= grid.w; x++) g.fillRect(x0 + x * T, y0, 1, grid.h * T);
+      for (let y = 0; y <= grid.h; y++) g.fillRect(x0, y0 + y * T, grid.w * T, 1);
+      // 家具
+      for (const it of game.s.items) {
+        const def = D.furniture[it.id];
+        const face = def.cat === 'chair' ? (game.seatByChair.get(it.uid) || { face: it.rot }).face : it.rot;
+        const e = AT.furniture(it.id, it.rot, face);
+        g.drawImage(e.c, x0 + it.x * T, y0 + it.y * T);
       }
-      g.fillStyle = color;
-      for (let k = 0; k < 8; k++) {
-        g.fillRect(px - 1 - 2 * k, py + k, 2, 1);
-        g.fillRect(px + 2 * k, py + k, 2, 1);
-        g.fillRect(px - 1 - 2 * k, py + 15 - k, 2, 1);
-        g.fillRect(px + 2 * k, py + 15 - k, 2, 1);
-      }
+      // 人（遊戲暫停中，只是讓你知道他們站在哪）
+      for (const m of game.crew) if (m.onDuty) this.topPerson(g, m.x, m.y, m.rec.look, m.boss ? '#e0b030' : '#f4f2ea');
+      for (const c of game.customers) if (c.state !== 'arrive') this.topPerson(g, c.x, c.y, c.look, null);
+      // 入口標示
+      const dp = this.proj(0, D.DOOR_Y + 0.5);
+      gfx.text(g, 'IN', Math.round(dp[0] + 2), Math.round(dp[1] - 3), '#fff4c0');
+      this.drawEditOverlay(g);
     }
 
-    drawGrid(g) {
-      const grid = this.game.grid;
-      for (let y = 0; y < grid.h; y++)
-        for (let x = 0; x < grid.w; x++) {
-          const p = this.proj(x, y);
-          this.diamond(g, p[0], p[1], 'rgba(255,255,255,0.38)', false);
-        }
+    topPerson(g, gx, gy, look, body) {
+      const p = this.proj(gx, gy);
+      const x = Math.round(p[0]);
+      const y = Math.round(p[1]);
+      gfx.ellipse(g, 'rgba(0,0,0,0.25)', x, y + 1, 4, 3);
+      gfx.ellipse(g, gfx.OUTLINE, x, y, 4, 4);
+      gfx.ellipse(g, body || D.PALETTE.top[look.top] || '#888', x, y, 3, 3);
+      gfx.ellipse(g, D.PALETTE.hair[look.hair] || '#333', x, y - 1, 2, 2);
     }
 
     drawItemSprite(g, it, part, alpha) {
@@ -512,22 +558,20 @@
       this.drawEditOverlay(g);
     }
 
-    /* ── 編輯模式：預覽與選取 ── */
+    /* ── 編輯模式（上視圖）：選取與放置預覽 ── */
     drawEditOverlay(g) {
       if (!this.edit) return;
       const game = this.game;
+      const T = AT.T;
       if (this.selectedItem != null) {
         const it = game.s.items.find((i) => i.uid === this.selectedItem);
         if (it) {
-          const def = D.furniture[it.id];
-          const fp = RC.world.footprint(def, it.rot);
+          const fp = RC.world.footprint(D.furniture[it.id], it.rot);
           const a = 0.6 + 0.4 * Math.sin(this.time * 7);
-          for (let dy = 0; dy < fp.h; dy++)
-            for (let dx = 0; dx < fp.w; dx++) {
-              const p = this.proj(it.x + dx, it.y + dy);
-              this.diamond(g, p[0], p[1], 'rgba(255,220,60,' + (0.25 + 0.15 * a) + ')', true);
-              this.diamond(g, p[0], p[1], '#ffe14a', false);
-            }
+          const p = this.proj(it.x, it.y);
+          g.fillStyle = 'rgba(255,220,60,' + (0.22 + 0.15 * a) + ')';
+          g.fillRect(p[0], p[1], fp.w * T, fp.h * T);
+          this.frame(g, p[0], p[1], fp.w * T, fp.h * T, '#ffe14a');
         }
       }
       const gh = this.ghost;
@@ -535,15 +579,9 @@
         const def = D.furniture[gh.id];
         const rot = gh.rot;
         const fp = RC.world.footprint(def, rot);
-        const col = gh.ok ? 'rgba(80,230,120,0.5)' : 'rgba(240,70,60,0.5)';
-        for (let dy = 0; dy < fp.h; dy++)
-          for (let dx = 0; dx < fp.w; dx++) {
-            const p = this.proj(gh.tx + dx, gh.ty + dy);
-            this.diamond(g, p[0], p[1], col, true);
-          }
-        const isChair = def.cat === 'chair';
+        const p = this.proj(gh.tx, gh.ty);
         let r2 = rot;
-        if (isChair) {
+        if (def.cat === 'chair') {
           // 預覽時讓椅子自動面向相鄰的桌子
           const grid = game.grid;
           for (let k = 0; k < 4; k++) {
@@ -555,12 +593,23 @@
             }
           }
         }
-        const e = A.furniture(gh.id, r2, 'all');
-        const p = this.proj(gh.tx, gh.ty);
-        g.globalAlpha = 0.8;
-        g.drawImage(e.c, p[0] - e.ax, p[1] - e.ay - 1 + Math.round(Math.sin(this.time * 6)));
+        const e = AT.furniture(gh.id, rot, r2);
+        g.globalAlpha = 0.85;
+        g.drawImage(e.c, p[0], p[1]);
         g.globalAlpha = 1;
+        g.fillStyle = gh.ok ? 'rgba(80,230,120,0.4)' : 'rgba(240,70,60,0.5)';
+        g.fillRect(p[0], p[1], fp.w * T, fp.h * T);
+        this.frame(g, p[0], p[1], fp.w * T, fp.h * T, gh.ok ? '#5fe88a' : '#ff5a4a');
       }
+    }
+
+    /** 1px 外框 */
+    frame(g, x, y, w, h, color) {
+      g.fillStyle = color;
+      g.fillRect(x, y, w, 1);
+      g.fillRect(x, y + h - 1, w, 1);
+      g.fillRect(x, y, 1, h);
+      g.fillRect(x + w - 1, y, 1, h);
     }
 
     /* ───────── 點擊判定 ───────── */
@@ -588,25 +637,8 @@
       return top;
     }
 
-    /** 以像素是否不透明判斷點到哪件家具（前方優先）。 */
+    /** 上視圖：點到哪一格就是哪件家具。 */
     pickItem(lx, ly) {
-      const items = this.game.s.items.slice().sort((a, b) => {
-        const fa = RC.world.footprint(D.furniture[a.id], a.rot);
-        const fb = RC.world.footprint(D.furniture[b.id], b.rot);
-        return fb.w / 2 + b.x + fb.h / 2 + b.y - (fa.w / 2 + a.x + fa.h / 2 + a.y);
-      });
-      for (const it of items) {
-        const def = D.furniture[it.id];
-        const face = def.cat === 'chair' ? (this.game.seatByChair.get(it.uid) || { face: it.rot }).face : it.rot;
-        const e = A.furniture(it.id, face, 'all');
-        const p = this.proj(it.x, it.y);
-        const x = Math.floor(lx - (p[0] - e.ax));
-        const y = Math.floor(ly - (p[1] - e.ay));
-        if (x < 0 || y < 0 || x >= e.c.width || y >= e.c.height) continue;
-        if (!e.data) e.data = ctx(e.c).getImageData(0, 0, e.c.width, e.c.height).data;
-        if (e.data[(y * e.c.width + x) * 4 + 3] > 40) return it;
-      }
-      // 沒點到實體時，退而以格子判斷
       const [gx, gy] = this.unproj(lx, ly);
       return RC.world.itemAt(this.game.grid, Math.floor(gx), Math.floor(gy)) || null;
     }
