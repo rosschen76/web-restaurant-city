@@ -23,6 +23,7 @@
   const REGISTER_DELAY = 1.5; // 有收銀機時，客人自助結帳前的等待（秒）
   const PL = D.PLATES;
   const DAYC = D.DAY;
+  const WAGE_QUIT = D.WAGE_QUIT_DAYS;
   const REP = D.REPUTATION;
   const PAY_TIMEOUT_NO_PAYER = 12; // 沒有人能收款時（掌櫃與店長都下班），客人很快就自助結帳
 
@@ -267,6 +268,7 @@
         onDuty: this.onShift(rec), // 在班才會出現在店裡
         ending: false, // 下班時間到了，手上的事做完就走
         endingSince: 0,
+        overtime: false,
         offSince: this.onShift(rec) ? 0 : this.absMin() - 24 * 60,
       };
       this.crew.push(m);
@@ -317,6 +319,7 @@
       this.abortJob(m);
       m.onDuty = false;
       m.ending = false;
+      m.overtime = false;
       m.offSince = abs;
       m.state = 'idle';
       m._sx = null;
@@ -326,21 +329,41 @@
     /** 依排班讓員工上下班；同時記下目前有沒有人能收款。 */
     updateDuty() {
       const abs = this.absMin();
+      const closing = this.closingWork();
       let payer = false;
       for (const m of this.crew) {
         const want = this.onShift(m.rec);
         if (m.onDuty) {
-          if (!want && !m.ending) {
-            m.ending = true;
-            m.endingSince = abs;
+          if (want) {
+            m.ending = false;
+            m.overtime = false;
+          } else if (m.overtime && abs - m.endingSince >= DAYC.closeOvertimeMin) {
+            this.clockOut(m, abs); // 收店加班已經到上限：不管手上的事，馬上下班
+          } else if (closing) {
+            // 班表結束時已經打烊、還有客人或餐具沒處理完：留下來把店收乾淨（加班有上限，不會無限留下）
+            if (!m.overtime) {
+              m.overtime = true;
+              m.endingSince = abs;
+            }
+            m.ending = false;
+          } else {
+            if (!m.ending) {
+              m.ending = true;
+              m.endingSince = abs;
+            }
+            // 手上的事做完就下班；拖超過 30 分鐘就強制下班
+            if (m.state === 'idle' || m.state === 'rest' || abs - m.endingSince >= 30) this.clockOut(m, abs);
           }
-          if (want && m.ending) m.ending = false;
-          // 手上的事做完就下班；拖超過 30 分鐘就強制下班（每天最多 8 小時，不能無限加班）
-          if (m.ending && (m.state === 'idle' || m.state === 'rest' || abs - m.endingSince >= 30)) this.clockOut(m, abs);
         } else if (want) this.clockIn(m);
         if (m.onDuty && !m.ending && (m.boss || m.rec.manager)) payer = true;
       }
       this.payerOn = payer;
+    }
+
+    /** 打烊後還有事沒做完：客人還在店裡（用餐、等結帳）、桌上有餐具、洗碗槽裡有髒盤子、手上還捧著餐具 */
+    closingWork() {
+      if (!this.dayMode || this.isOpen()) return false;
+      return this.customers.length > 0 || this.dirty.size > 0 || this.s.sinkDirty > 0 || this.crew.some((m) => m.carryPlates > 0);
     }
 
     /** 往前走 dt 秒的時鐘；回傳這一步經過的遊戲分鐘數。 */
@@ -386,9 +409,10 @@
       const served = s.stats.served - this.dayMark.served;
       const earned = s.stats.earned - this.dayMark.earned;
       this.dayMark = { served: s.stats.served, earned: s.stats.earned };
+      const wages = this.payWages();
       s.day++;
-      this.emit('newday', { day: s.day, served, earned, reputation: s.reputation });
-      if (served > 0 || earned > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣`, 'info');
+      this.emit('newday', { day: s.day, served, earned, wages: wages.paid, reputation: s.reputation });
+      if (served > 0 || earned > 0 || wages.paid > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣${wages.paid > 0 ? `，發出日薪 ${wages.paid}` : ''}`, 'info');
       if (!this.offline) {
         // 風評連續停在谷底：滿 15 天餐廳就倒閉
         if (s.reputation <= REP.min + 1e-6) s.lowDays++;
@@ -398,6 +422,33 @@
       }
       if (s.schedule.auto) this.autoSchedule();
       this.changed();
+    }
+
+    /**
+     * 午夜發日薪（店掌櫃不領）。金幣不夠就先發給編號小的員工；領不到的員工累計欠薪天數，
+     * 連續 3 天沒領到薪水就離職（離線補算期間不會離職，回來後才會知道）。
+     */
+    payWages() {
+      const s = this.s;
+      let paid = 0;
+      const quits = [];
+      for (const rec of s.staff) {
+        if (rec.boss || !(rec.wage > 0)) continue;
+        if (s.coins >= rec.wage) {
+          s.coins -= rec.wage;
+          paid += rec.wage;
+          rec.unpaid = 0;
+        } else {
+          rec.unpaid = Math.min(rec.unpaid + 1, WAGE_QUIT);
+          if (!this.offline && rec.unpaid >= WAGE_QUIT) quits.push(rec);
+          else this.toast(`⚠ 金幣不夠發薪水：${rec.name} 已經 ${rec.unpaid} 天沒領到薪水`, 'bad');
+        }
+      }
+      for (const rec of quits) {
+        this.fire(rec.id);
+        this.toast(`${rec.name} 連續 ${WAGE_QUIT} 天領不到薪水，辭職了`, 'bad');
+      }
+      return { paid, quits: quits.length };
     }
 
     endGame(reason) {
@@ -1423,11 +1474,11 @@
       const cand = s.candidates[idx];
       if (!cand) return this.fail('找不到應徵者');
       if (s.staff.filter((m) => !m.boss).length >= D.maxStaffForLevel(s.level)) return this.fail('員工人數已達上限，升級可增加名額');
-      const cost = RC.state.hireCost(cand, s.staff.length);
-      if (s.coins < cost) return this.fail('金幣不足');
-      s.coins -= cost;
+      // 不再一次買斷：雇用不用付錢，之後每天午夜發日薪。手上至少要有一天的薪水，免得第一天就發不出來
+      const wage = RC.state.dailyWage(cand, s.staff.length);
+      if (s.coins < wage) return this.fail(`金幣不足：至少要有一天的日薪 ${wage}`);
       // 新員工當下立刻開始第一個班（8 小時）；自動排班會在隔天重新規劃
-      const rec = RC.state.newStaff(s.nextStaffId++, { ...cand, shift: Math.floor(this.hour) % 24 });
+      const rec = RC.state.newStaff(s.nextStaffId++, { ...cand, wage, shift: Math.floor(this.hour) % 24 });
       s.staff.push(rec);
       this.addCrew(rec);
       s.candidates[idx] = RC.state.makeCandidate(this.rng, s.staff.map((m) => m.name));

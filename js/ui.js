@@ -224,7 +224,7 @@
       set(this.el.navQuest, !!(q && q.done), '!');
       const learnable = D.dishList.filter((d) => !s.dishes[d.id] && s.level >= d.level && s.coins >= d.learn).length;
       set(this.el.navMenu, learnable > 0, String(learnable));
-      const hireable = s.staff.filter((m) => !m.boss).length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.hireCost(c, s.staff.length));
+      const hireable = s.staff.filter((m) => !m.boss).length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.dailyWage(c, s.staff.length));
       set(this.el.navStaff, hireable, '+');
     }
 
@@ -371,7 +371,7 @@
         case 'shop': tabs = SHOP_TABS; html = this.htmlShop(p.tab); break;
         case 'inv': html = this.htmlInventory(); break;
         case 'menu': html = this.htmlMenu(); break;
-        case 'staff': tabs = [{ id: 'crew', name: '員工' }, { id: 'sched', name: '排班' }]; html = p.tab === 'sched' ? this.htmlSchedule() : this.htmlStaff(); break;
+        case 'staff': tabs = [{ id: 'crew', name: '員工' }, { id: 'hire', name: '招聘' }, { id: 'sched', name: '排班' }]; html = p.tab === 'sched' ? this.htmlSchedule() : p.tab === 'hire' ? this.htmlRecruit() : this.htmlStaff(); break;
         case 'quest': html = this.htmlQuests(); break;
         case 'settings': tabs = [{ id: 'main', name: '一般' }, { id: 'stats', name: '統計' }, { id: 'data', name: '存檔' }]; html = this.htmlSettings(p.tab); break;
         default:
@@ -396,7 +396,7 @@
       for (const m of this.game.crew) {
         const q = (k) => p.overlay.querySelector(`[data-${k}="${m.id}"]`);
         const st = q('st');
-        if (st) this.setText(st, m.onDuty ? STATE_SHORT[m.state] || '' : '下班中');
+        if (st) this.setText(st, !m.onDuty ? '下班中' : m.overtime ? '收店加班・' + (STATE_SHORT[m.state] || '') : STATE_SHORT[m.state] || '');
         const bar = q('en');
         if (!bar) continue; // 掌櫃沒有體力條
         bar.style.width = m.rec.energy + '%';
@@ -531,16 +531,18 @@
         .join('');
     }
 
+    /** 員工分頁：目前的店掌櫃與員工（日薪、欠薪、班別、體力） */
     htmlStaff() {
       const g = this.game;
       const s = g.s;
       const cap = D.maxStaffForLevel(s.level);
       const hired = s.staff.filter((m) => !m.boss).length;
+      const totalWage = s.staff.reduce((n, m) => n + (m.wage || 0), 0);
       const row = (m) => {
         if (m.boss) {
           return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">店掌櫃・你</span> <span class="tag" data-st="${m.id}"></span></div>
-            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除</div>
+            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除，不用領薪水</div>
             <div class="sub">班別 ${shiftText(m.shift)}（每天最多 ${D.DAY.shiftHours} 小時）</div>
             <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子、洗碗。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
@@ -548,25 +550,40 @@
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　班別 ${shiftText(m.shift)}</div>
+            <div class="sub">日薪 ${ic('coin', 1)}${fmt(m.wage)}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
             ${m.manager ? `<button class="btn small" data-act="clear-manager">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
             <button class="btn small danger" data-act="fire" data-id="${m.id}">解雇</button></div></div>`;
       };
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
+      return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
+        <div class="sub" style="margin:6px 3px">每天午夜發日薪，合計 ${ic('coin', 1)}<b>${fmt(totalWage)}</b>；金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到就會辭職。</div>
+        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；Lv.${D.DAY.managerLevel} 以上可任命為值班店長，能代替掌櫃收款）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
+        <div class="sub" style="margin:6px 3px">想找新人，到「招聘」分頁。</div>`;
+    }
+
+    /** 招聘分頁：應徵者與日薪（雇用不用先付錢，之後每天發薪） */
+    htmlRecruit() {
+      const s = this.game.s;
+      const cap = D.maxStaffForLevel(s.level);
+      const hired = s.staff.filter((m) => !m.boss).length;
       const canHire = hired < cap;
+      const totalWage = s.staff.reduce((n, m) => n + (m.wage || 0), 0);
       const cands = s.candidates
         .map((c, i) => {
-          const cost = RC.state.hireCost(c, s.staff.length);
-          const lack = s.coins < cost;
+          const wage = RC.state.dailyWage(c, s.staff.length);
+          const lack = s.coins < wage;
           return `<div class="row"><div class="ico"><img class="px" src="${avatar(c.look, true)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(c.name)}</div><div class="sub">速度 ${c.speed.toFixed(2)}　技術 ${c.skill.toFixed(2)}</div></div>
-            <button class="btn primary" data-act="hire" data-idx="${i}" ${!canHire || lack ? 'disabled' : ''}>雇用 ${ic('coin', 1)}${fmt(cost)}</button></div>`;
+            <div class="grow"><div class="nm">${esc(c.name)}</div><div class="sub">速度 ${c.speed.toFixed(2)}　技術 ${c.skill.toFixed(2)}</div>
+            <div class="sub">日薪 ${ic('coin', 1)}<b>${fmt(wage)}</b> / 天${lack ? ' <span class="bad">（手上至少要有一天的薪水）</span>' : ''}</div></div>
+            <button class="btn primary" data-act="hire" data-idx="${i}" ${!canHire || lack ? 'disabled' : ''}>雇用</button></div>`;
         })
         .join('');
-      return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
-        <div class="section-title">應徵者　<button class="btn small" data-act="refresh-cands">重新徵才 ${ic('coin', 1)}30</button></div>${cands}
-        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；Lv.${D.DAY.managerLevel} 以上可任命為值班店長，能代替掌櫃收款）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>`;
+      return `<div class="section-title" style="margin-top:0">應徵者　<button class="btn small" data-act="refresh-cands">重新徵才 ${ic('coin', 1)}30</button></div>
+        <div class="sub" style="margin:0 3px 4px">員工名額 ${hired} / ${cap}${canHire ? '' : '（已額滿，升級可增加名額）'}　現有員工日薪合計 ${ic('coin', 1)}${fmt(totalWage)} / 天</div>
+        ${cands}
+        <div class="sub" style="margin:6px 3px;line-height:1.6">雇用<b>不用先付錢</b>，改成每天午夜發<b>日薪</b>（店掌櫃不領薪水）。手上要有至少一天的薪水才能雇；之後金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到薪水就會辭職。能力越強、人數越多，日薪越高。</div>`;
     }
 
     /** 排班：營業時間、自動排班、每位員工的班別與 24 小時覆蓋 */
@@ -607,7 +624,8 @@
         <div class="section-title">排班</div>
         <div class="sched-row"><button class="btn small ${sc.auto ? 'primary' : ''}" data-act="auto-sched">自動排班：${sc.auto ? '開' : '關'}</button>
           <span class="sub">${sc.auto ? '開啟時，班表會跟著營業時間與人員自動調整' : '手動排班：自己決定每個人幾點上班'}</span></div>
-        <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天最多上班 ${D.DAY.shiftHours} 小時，時間到就會下班。離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
+        <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天排定上班 ${D.DAY.shiftHours} 小時，離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
+        <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、餐具洗完才下班（最多加班 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班。</div>
         <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
         <div class="h24-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
         ${warns.map((w) => `<div class="warn-line">⚠ ${w}</div>`).join('')}
@@ -651,6 +669,7 @@
           <span>營業天數</span><b>第 ${s.day} 天</b>
           <span>餐廳風評</span><b>${s.reputation > 0 ? '+' : ''}${s.reputation.toFixed(1)}（${D.REPUTATION.min} ~ +${D.REPUTATION.max}）</b>
           <span>員工人數</span><b>${s.staff.length} 位</b>
+          <span>每日薪資合計</span><b>${fmt(s.staff.reduce((n, m) => n + (m.wage || 0), 0))} 金幣</b>
           <span>座位數</span><b>${g.seats.length}</b>
           <span>遊玩時間</span><b>${Math.floor(mins / 60)} 小時 ${mins % 60} 分</b></div>`;
       }
@@ -702,7 +721,7 @@
         <li>餐廳有<b>營業時間與休息時間</b>；每位員工每天最多上班 8 小時，可以到「員工 → 排班」自己排或交給自動排班</li>
         <li>用過的餐具要先送到<b>洗碗槽</b>洗乾淨才有盤子能用；風評連續 15 天跌到谷底，餐廳就會倒閉</li>
         <li>到「商店」買桌椅、爐灶與裝飾，椅子要<b>緊鄰桌子</b></li>
-        <li>到「菜單」學新菜色，「員工」雇用更多幫手；進度會自動存檔，離開期間也會替你賺錢</li></ul>
+        <li>到「菜單」學新菜色，「員工 → 招聘」找幫手（雇用不用先付錢，每天午夜發<b>日薪</b>）；進度會自動存檔，離開期間也會替你賺錢</li></ul>
         <div class="section-title" style="margin-top:6px">幫你的店掌櫃取個名字</div>
         <input type="text" id="bn0" maxlength="8" value="${esc(boss ? boss.name : '')}">
         <div style="text-align:center;margin-top:6px"><button class="btn primary" data-act="welcome-ok">開始營業！</button></div></div>`);
