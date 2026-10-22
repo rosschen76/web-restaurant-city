@@ -539,7 +539,7 @@
       const s = g.s;
       const cap = D.maxStaffForLevel(s.level);
       const hired = s.staff.filter((m) => !m.boss).length;
-      const totalWage = s.staff.reduce((n, m) => n + (m.wage || 0), 0);
+      const totalWage = s.staff.reduce((n, m) => n + g.wageOf(m), 0);
       const row = (m) => {
         if (m.boss) {
           return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
@@ -551,8 +551,9 @@
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}${m.level >= D.STAFF_XP_STEPS.length ? '・滿級' : ''}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
-            <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　班別 ${shiftText(m.shift)}</div>
-            <div class="sub">日薪 ${ic('coin', 1)}${fmt(m.wage)}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
+            <div class="sub">速度 ${g.speedOf(m).toFixed(2)}　技術 ${g.skillOf(m).toFixed(2)}${m.raise ? `（加薪加成 +${(m.raise * D.RAISE.abilityPerPct).toFixed(1)}%）` : ''}　班別 ${shiftText(m.shift)}</div>
+            <div class="sub">日薪 ${ic('coin', 1)}${fmt(g.wageOf(m))}${m.raise ? `（基本 ${fmt(m.wage)} ＋${m.raise}%）` : ''}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
+            <div class="sub raise-row">加薪 <input type="range" min="0" max="${D.RAISE.max}" step="1" value="${m.raise || 0}" data-raise="${m.id}" aria-label="${esc(m.name)}的加薪百分比"><b data-raise-label>${m.raise || 0}%</b></div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
             ${m.manager ? `<button class="btn small" data-act="clear-manager">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
@@ -561,6 +562,7 @@
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
       return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="sub" style="margin:6px 3px">每天午夜發日薪，合計 ${ic('coin', 1)}<b>${fmt(totalWage)}</b>；金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到就會辭職。</div>
+        <div class="sub" style="margin:6px 3px">員工等級最高 Lv.${D.STAFF_XP_STEPS.length}。可以替每位員工<b>加薪 0～${D.RAISE.max}%</b>：日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +${D.RAISE.abilityPerPct}% 能力，最多 +${D.RAISE.max * D.RAISE.abilityPerPct}%）；調回 0% 能力就恢復。</div>
         <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；Lv.${D.DAY.managerLevel} 以上可任命為值班店長，能代替掌櫃收款）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
         <div class="sub" style="margin:6px 3px">想找新人，到「招聘」分頁。</div>`;
     }
@@ -1170,7 +1172,7 @@
           el.innerHTML = `<span class="x" data-act="actor-close">✕</span><h4><img class="px" src="${avatar(m.rec.look, true, m.boss)}" width="20" height="36" alt=""><span>${esc(m.rec.name)}</span>${m.boss ? '<span class="tag gold">店掌櫃・你</span>' : `<span class="tag gold">Lv.${m.rec.level}</span>`}</h4>
             ${m.boss ? '' : '<div class="bar energy"><i data-f="en"></i></div><div class="bar-label" data-f="entx"></div>'}
             <div class="sub" data-f="st" style="margin:4px 0"></div>
-            <div class="sub">速度 ${m.rec.speed.toFixed(2)}　技術 ${m.rec.skill.toFixed(2)}${m.boss ? '　不會累' : ''}</div>
+            <div class="sub">速度 ${g.speedOf(m.rec).toFixed(2)}　技術 ${g.skillOf(m.rec).toFixed(2)}${m.boss ? '　不會累' : ''}</div>
             ${m.boss ? '<button class="btn small" data-act="boss-rename">改名</button>' : `<button class="btn small" data-act="feed" data-id="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>`}`;
           el.hidden = false;
         }
@@ -1262,6 +1264,12 @@
       });
       // 設定裡的音量滑桿
       document.body.addEventListener('input', (e) => {
+        const rz = e.target.closest && e.target.closest('[data-raise]');
+        if (rz) {
+          const lab = rz.parentElement.querySelector('[data-raise-label]');
+          if (lab) lab.textContent = rz.value + '%'; // 拖曳時先更新數字，放開才真的套用
+          return;
+        }
         const el = e.target.closest && e.target.closest('[data-vol]');
         if (!el) return;
         const A = RC.audio;
@@ -1273,6 +1281,15 @@
         this.persistAudio();
       });
       document.body.addEventListener('change', (e) => {
+        const rz = e.target.closest && e.target.closest('[data-raise]');
+        if (rz) {
+          const r = this.game.setRaise(+rz.dataset.raise, +rz.value);
+          if (!r.ok) this.toast(r.msg, 'bad');
+          RC.audio.sfx(r.ok ? 'click' : 'error');
+          if (this.panel) this.panel.lastHtml = null;
+          this.renderPanel();
+          return;
+        }
         const sel = e.target.closest && e.target.closest('[data-sel]');
         if (sel && this.panel && this.panel.name === 'staff') {
           const g = this.game;

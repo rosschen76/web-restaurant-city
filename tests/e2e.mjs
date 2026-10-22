@@ -470,6 +470,23 @@ await scenario('客流尖峰／離峰：HUD 顯示時段，排班頁有客流圖
   assert.equal(await page.locator('.h24 i[title*="客流"]').count(), 24);
 });
 
+await scenario('加薪：員工面板有 0～20% 滑桿，調整後日薪與能力同步改變，可存檔', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 5000; g.s.level = 5; g.hire(0); });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  const slider = page.locator('[data-raise]');
+  assert.equal(await slider.count(), 1, '掌櫃沒有加薪滑桿，只有員工有');
+  assert.equal(await slider.getAttribute('max'), '20');
+  const before = await G(page, () => { const g = window.__game.game; return [g.wageOf(g.s.staff[1]), g.speedOf(g.s.staff[1])]; });
+  await slider.evaluate((el) => { el.value = '20'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const after = await G(page, () => { const g = window.__game.game; return [g.wageOf(g.s.staff[1]), g.speedOf(g.s.staff[1]), g.s.staff[1].raise]; });
+  assert.equal(after[2], 20);
+  assert.equal(after[0], Math.round(before[0] * 1.2));
+  assert.ok(after[1] > before[1]);
+  const txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('＋20%') && txt.includes('加薪加成'), txt);
+});
+
 await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => { const g = window.__game.game; g.s.reputation = -10; g.s.lowDays = 14; g.s.clock = 1439.5; });

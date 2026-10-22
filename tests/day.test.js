@@ -272,21 +272,27 @@ test('沒有人能收款時，客人 12 秒後自助結帳（沒有小費）', (
   assert.equal(selfPaid, 0, '自助結帳沒有小費');
 });
 
-test('員工等級上限 10，達到 10 級時提示可任命值班店長', () => {
+test('員工等級上限 15；升到 10 級時提示可任命值班店長；每級技術 +0.03、速度 +0.02', () => {
   const g = mk(15);
   hire(g, 1);
   const rec = g.s.staff[1];
-  assert.equal(D.STAFF_XP_STEPS.length, 10);
+  assert.equal(D.STAFF_XP_STEPS.length, 15);
+  for (let i = 2; i < D.STAFF_XP_STEPS.length; i++) assert.ok(D.STAFF_XP_STEPS[i] > D.STAFF_XP_STEPS[i - 1]);
   rec.level = 9;
   rec.xp = D.STAFF_XP_STEPS[9] - 1;
   const toasts = [];
   g.on('toast', (e) => toasts.push(e.msg));
+  const sp = rec.speed;
+  const sk = rec.skill;
   g.gainStaffXp(rec);
   assert.equal(rec.level, 10);
   assert.ok(toasts.some((t) => t.includes('值班店長')));
+  assert.ok(Math.abs(rec.speed - sp - 0.02) < 1e-9 && Math.abs(rec.skill - sk - 0.03) < 1e-9);
   rec.xp = 99999;
+  for (let i = 0; i < 10; i++) g.gainStaffXp(rec);
+  assert.equal(rec.level, 15, '最高 15 級');
   g.gainStaffXp(rec);
-  assert.equal(rec.level, 10, '不會超過 10 級');
+  assert.equal(rec.level, 15, '不會超過 15 級');
 });
 
 /* ───────── 打烊收店：客人服務完、餐具洗完，員工才下班 ───────── */

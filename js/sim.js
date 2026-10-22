@@ -469,10 +469,11 @@
       let paid = 0;
       const quits = [];
       for (const rec of s.staff) {
-        if (rec.boss || !(rec.wage > 0)) continue;
-        if (s.coins >= rec.wage) {
-          s.coins -= rec.wage;
-          paid += rec.wage;
+        const wage = this.wageOf(rec);
+        if (rec.boss || !(wage > 0)) continue;
+        if (s.coins >= wage) {
+          s.coins -= wage;
+          paid += wage;
           rec.unpaid = 0;
         } else {
           rec.unpaid = Math.min(rec.unpaid + 1, WAGE_QUIT);
@@ -1029,7 +1030,7 @@
 
     stepStaff(m, dt) {
       const rec = m.rec;
-      const spd = STAFF_SPEED * rec.speed;
+      const spd = STAFF_SPEED * this.speedOf(rec);
       if (rec.boss) rec.energy = 100; // 店掌櫃是玩家本人，不會累
       const c = m.job ? this.customerById(m.job.cid) : null;
       if (m.job && (!c || c.state === 'leave' || c.claimedBy !== m.id)) {
@@ -1064,7 +1065,7 @@
           if (m.state === 'to_pay') {
             if (this.follow(m, spd, dt)) {
               m.state = 'paying';
-              m.payTotal = m.t = PAY_TIME / rec.speed;
+              m.payTotal = m.t = PAY_TIME / this.speedOf(rec);
               this.faceTo(m, pc);
             }
           } else {
@@ -1086,7 +1087,7 @@
           }
           if (this.follow(m, spd, dt)) {
             m.state = 'cleaning';
-            m.cleanTotal = m.t = CLEAN_TIME / rec.speed;
+            m.cleanTotal = m.t = CLEAN_TIME / this.speedOf(rec);
             m.dir = this.dirToward(m, t.seats[0].tx + 0.5, t.seats[0].ty + 0.5);
           }
           break;
@@ -1138,7 +1139,7 @@
           }
           if (this.follow(m, spd, dt)) {
             m.state = 'washing';
-            m.washTotal = m.t = PL.washTime / rec.speed;
+            m.washTotal = m.t = PL.washTime / this.speedOf(rec);
             m.dir = this.dirToward(m, sink.x + 0.5, sink.y + 0.5);
           }
           break;
@@ -1166,7 +1167,7 @@
         case 'to_customer':
           if (this.follow(m, spd, dt)) {
             m.state = 'taking';
-            m.t = TAKE_ORDER_TIME / rec.speed;
+            m.t = TAKE_ORDER_TIME / this.speedOf(rec);
             c.state = 'ordering';
             this.faceTo(m, c);
           }
@@ -1191,7 +1192,7 @@
           if (this.follow(m, spd, dt)) {
             const st = this.stoveByUid.get(m.stove);
             m.state = 'cooking';
-            m.cookTotal = this.cookTime(c.dish, st ? st.speed : 1, rec.skill);
+            m.cookTotal = this.cookTime(c.dish, st ? st.speed : 1, this.skillOf(rec));
             m.t = m.cookTotal;
             if (st) m.dir = this.dirToward(m, st.x + 0.5, st.y + 0.5);
           }
@@ -1217,7 +1218,7 @@
         case 'to_serve':
           if (this.follow(m, spd, dt)) {
             m.state = 'serving';
-            m.t = SERVE_TIME / rec.speed;
+            m.t = SERVE_TIME / this.speedOf(rec);
             this.faceTo(m, c);
           }
           break;
@@ -1243,6 +1244,22 @@
           break;
         default:
       }
+    }
+
+    /** 加薪帶來的能力加成倍率（1 = 沒加薪） */
+    raiseBoost(rec) {
+      return 1 + (D.RAISE.abilityPerPct * (rec.raise || 0)) / 100;
+    }
+    /** 實際速度／技術：基本能力（含升級成長）× 加薪加成 */
+    speedOf(rec) {
+      return rec.speed * this.raiseBoost(rec);
+    }
+    skillOf(rec) {
+      return rec.skill * this.raiseBoost(rec);
+    }
+    /** 實際日薪：基本日薪 × (1 + 加薪%) */
+    wageOf(rec) {
+      return rec.boss ? 0 : Math.round(rec.wage * (1 + (rec.raise || 0) / 100));
     }
 
     gainStaffXp(rec) {
@@ -1582,6 +1599,17 @@
       if (!(start >= 0 && start <= 23)) return this.fail('時間不正確');
       rec.shift = start;
       this.s.schedule.auto = false;
+      return this.done();
+    }
+
+    /** 為員工加薪 0～20%（整數）：日薪照比例增加，能力同步提升 */
+    setRaise(id, pct) {
+      const rec = this.s.staff.find((m) => m.id === id);
+      if (!rec) return this.fail('找不到員工');
+      if (rec.boss) return this.fail('店掌櫃不領薪水，不能加薪');
+      pct = Math.round(+pct);
+      if (!(pct >= 0 && pct <= D.RAISE.max)) return this.fail(`加薪要在 0～${D.RAISE.max}% 之間`);
+      rec.raise = pct;
       return this.done();
     }
 

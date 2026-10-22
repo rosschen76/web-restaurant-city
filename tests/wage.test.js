@@ -118,3 +118,61 @@ test('舊存檔（員工是一次買斷）：載入時依能力補上日薪，�
   assert.equal(legacy.staff[1].wage, RC.state.dailyWage(legacy.staff[1], 1));
   assert.equal(legacy.staff[1].unpaid, 0);
 });
+
+/* ───────── 加薪：日薪與能力一起提升 ───────── */
+
+test('加薪 0～20%：日薪照比例增加、速度與技術同步提升；超出範圍或掌櫃會被拒絕', () => {
+  const g = mk(8, (s) => ((s.coins = 5000), (s.level = 12)));
+  g.hire(0);
+  const rec = g.s.staff[1];
+  const base = rec.wage;
+  assert.equal(rec.raise, 0);
+  assert.equal(g.wageOf(rec), base);
+  assert.equal(g.speedOf(rec), rec.speed);
+  assert.equal(g.setRaise(rec.id, 20).ok, true);
+  assert.equal(rec.raise, 20);
+  assert.equal(g.wageOf(rec), Math.round(base * 1.2));
+  const boost = 1 + (D.RAISE.abilityPerPct * 20) / 100;
+  assert.ok(Math.abs(g.speedOf(rec) - rec.speed * boost) < 1e-9);
+  assert.ok(Math.abs(g.skillOf(rec) - rec.skill * boost) < 1e-9);
+  assert.ok(boost > 1 && boost <= 1.1 + 1e-9);
+  assert.equal(g.setRaise(rec.id, 21).ok, false);
+  assert.equal(g.setRaise(rec.id, -1).ok, false);
+  assert.equal(g.setRaise(rec.id, 'abc').ok, false);
+  assert.equal(rec.raise, 20, '失敗不會改動');
+  assert.equal(g.setRaise(g.s.staff[0].id, 10).ok, false, '店掌櫃不領薪水');
+  assert.equal(g.setRaise(9999, 5).ok, false);
+  assert.equal(g.setRaise(rec.id, 7.4).ok, true);
+  assert.equal(rec.raise, 7, '四捨五入成整數');
+  g.setRaise(rec.id, 0);
+  assert.equal(g.speedOf(rec), rec.speed, '調回 0% 能力就恢復（不是永久加成）');
+});
+
+test('午夜按加薪後的日薪發放；加薪的員工動作更快（同樣工作花的時間更短）', () => {
+  const g = mk(9, (s) => ((s.coins = 5000), (s.level = 12)));
+  g.hire(0);
+  g.hire(1);
+  g.setRaise(g.s.staff[1].id, 20);
+  const total = g.wageOf(g.s.staff[1]) + g.wageOf(g.s.staff[2]);
+  assert.equal(total, Math.round(g.s.staff[1].wage * 1.2) + g.s.staff[2].wage);
+  g.setBusinessHours(1, 2);
+  const coins0 = g.s.coins;
+  toMidnight(g);
+  assert.equal(coins0 - g.s.coins, total);
+});
+
+test('加薪存檔來回、掌櫃的加薪永遠是 0、亂填的值會被修正', () => {
+  const g = mk(10, (s) => ((s.coins = 5000), (s.level = 12)));
+  g.hire(0);
+  g.setRaise(g.s.staff[1].id, 12);
+  const back = RC.state.parse(RC.state.serialize(g.s));
+  assert.equal(back.staff[1].raise, 12);
+  const raw = JSON.parse(JSON.stringify(g.s));
+  raw.staff[1].raise = 999;
+  raw.staff[0].raise = 15;
+  const fixed = RC.state.normalize(raw);
+  assert.equal(fixed.staff[1].raise, D.RAISE.max);
+  assert.equal(fixed.staff[0].raise, 0);
+  delete raw.staff[1].raise;
+  assert.equal(RC.state.normalize(raw).staff[1].raise, 0, '舊存檔沒有加薪欄位：視為 0%');
+});
