@@ -25,6 +25,7 @@
   const PL = D.PLATES;
   const DAYC = D.DAY;
   const WAGE_QUIT = D.WAGE_QUIT_DAYS;
+  const ACH_AT = new Set([...D.MASTERY_STEPS, 100, 500, 2000]); // 烹飪次數到這些數字時才檢查成就
   const REP = D.REPUTATION;
   const PAY_TIMEOUT_NO_PAYER = 12; // 沒有人能收款時（掌櫃與店長都下班），客人很快就自助結帳
 
@@ -38,6 +39,8 @@
       this.pauseReasons = new Set(); // 暫停的原因可以疊加：'user' 玩家按暫停、'edit' 裝潢中、'settings' 設定面板開著
       // dayMode=false：不分日夜、不排班（所有人隨時待命、永遠營業）；測試用，正式遊戲一律開啟
       this.dayMode = opts.dayMode !== false;
+      // stock=false：食材不限量、不進貨（測試用，專測進貨與庫存的測試才開啟；正式遊戲一律開啟）
+      this.stockOn = opts.stock !== false;
       // headless：沒有玩家在的店，由結算程式暫時跑起來補算（不推進公司的時間、客流打折）
       this.headless = !!opts.headless;
       this.initRuntime();
@@ -50,6 +53,7 @@
       this.crew = [];
       this.nextCid = 1;
       this.stoveBusy = new Map(); // stove uid -> staff id
+      this.procureToday = 0; // 今天進貨花掉的錢（午夜結算用）
       this.seatTaken = new Map(); // chair uid -> customer id
       this.queue = []; // 門外候位的團體
       this.parties = []; // 已入座的團體
@@ -144,6 +148,7 @@
       for (const uid of [...this.dirty.keys()]) if (!this.tables.has(uid)) this.dirty.delete(uid);
       this.stoves = W.findStoves(this.grid);
       this.stoveByUid = new Map(this.stoves.map((x) => [x.uid, x]));
+      this.maxStoveTier = this.stoves.reduce((n, x) => Math.max(n, x.tier), -1); // 煮得動多高等級的菜（-1＝沒有爐灶）
       this.sinks = W.findSinks(this.grid);
       this.sinkByUid = new Map(this.sinks.map((x) => [x.uid, x]));
       this.recalc();
@@ -170,7 +175,18 @@
       this.appeal = appeal;
       this.stars = D.starsForAppeal(appeal);
       this.hasRegister = !!counts.register;
-      this.fridgeBonus = Math.min(3, counts.fridge || 0) * 0.06;
+      // 冰箱類（小冰箱、雙門冷藏櫃、專業冷凍庫）：烹飪時間 -6%（最多 3 台），容量全部相加
+      let fridges = 0;
+      let cap = D.STOCK.base;
+      for (const [id, n] of Object.entries(counts)) {
+        const def = D.furniture[id];
+        if (def && def.fn === 'fridge') {
+          fridges += n;
+          cap += n * (def.cap || 0);
+        }
+      }
+      this.fridgeBonus = Math.min(3, fridges) * 0.06;
+      this.storageCap = cap;
       this.counts = counts;
     }
 
@@ -250,13 +266,14 @@
       const rec = this.s.dishes[id];
       const cooked = rec ? rec.cooked : 0;
       const m = D.masteryLevel(cooked);
-      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.1 * this.stars));
+      const perks = this.achPerks();
+      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.1 * this.stars) * (1 + perks.price + (perks.priceCat[d.cat] || 0)));
       return { def: d, mastery: m, cooked, price, learned: !!rec };
     }
 
     cookTime(dishId, stoveSpeed, skill) {
       const m = D.masteryLevel(this.s.dishes[dishId].cooked);
-      const base = D.dishes[dishId].cook * (1 - 0.05 * (m - 1)) * (1 - this.fridgeBonus);
+      const base = D.dishes[dishId].cook * (1 - 0.05 * (m - 1)) * (1 - this.fridgeBonus) * (1 - this.achPerks().cook);
       return Math.max(1.2, base / (stoveSpeed * skill));
     }
 
@@ -366,7 +383,7 @@
       return this.crew.some((m) => m.onDuty && !m.ending);
     }
     canOpenDoor() {
-      return !this.dayMode || (this.isOpen() && this.anyOnDuty());
+      return (!this.dayMode || (this.isOpen() && this.anyOnDuty())) && this.sellable().length > 0; // 菜都賣完了，客人就不上門
     }
     adjustRep(d) {
       this.s.reputation = clamp(this.s.reputation + d, REP.min, REP.max);
@@ -446,6 +463,7 @@
         this.s.clock -= 1440;
         this.endDay();
       }
+      if (this.stockOn && this.s.stockDay < this.s.day && this.s.clock >= D.STOCK.deliveryHour * 60) this.deliver(); // 每天 10 點到貨
       const open = this.isOpen();
       if (open !== this.wasOpen) {
         this.wasOpen = open;
@@ -479,9 +497,11 @@
       const earned = s.stats.earned - this.dayMark.earned;
       this.dayMark = { served: s.stats.served, earned: s.stats.earned };
       const wages = this.payWages(earned);
+      const procure = this.procureToday;
+      this.procureToday = 0;
       s.day++;
-      this.emit('newday', { day: s.day, served, earned, wages: wages.paid + wages.welfare + wages.bonus, reputation: s.reputation });
-      if (served > 0 || earned > 0 || wages.paid > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣${wages.paid > 0 ? `，發出日薪 ${wages.paid}${wages.welfare > 0 ? `、福利金 ${wages.welfare}` : ''}${wages.bonus > 0 ? `、分紅 ${wages.bonus}` : ''}` : ''}`, 'info');
+      this.emit('newday', { day: s.day, served, earned, wages: wages.paid + wages.welfare + wages.bonus, procure, reputation: s.reputation });
+      if (served > 0 || earned > 0 || wages.paid > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣${procure > 0 ? `，進貨 ${procure}` : ''}${wages.paid > 0 ? `，發出日薪 ${wages.paid}${wages.welfare > 0 ? `、福利金 ${wages.welfare}` : ''}${wages.bonus > 0 ? `、分紅 ${wages.bonus}` : ''}` : ''}`, 'info');
       if (!this.offline) {
         // 風評連續停在谷底：滿 15 天餐廳就倒閉
         if (s.reputation <= REP.min + 1e-6) s.lowDays++;
@@ -845,9 +865,170 @@
       }
     }
 
+    /** 這間店目前賣得出去的菜：上架、有庫存、而且爐灶煮得動 */
+    sellable() {
+      const s = this.s;
+      return s.menu.filter((id) => (!this.stockOn || (s.stock[id] || 0) > 0) && this.cookable(id));
+    }
+
+    /** 這間店有沒有等級夠高的爐灶煮這道菜 */
+    cookable(id) {
+      return this.maxStoveTier >= D.stoveTier(D.dishes[id].stove);
+    }
+
+    /** 客人點餐：從賣得出去的菜隨機挑一道，庫存 -1；全部賣完回傳 null */
     pickDish() {
-      const learned = Object.keys(this.s.dishes);
-      return this.rng.pick(learned);
+      const list = this.sellable();
+      if (!list.length) return null;
+      const id = this.rng.pick(list);
+      const s = this.s;
+      if (!this.stockOn) return id;
+      s.stock[id]--;
+      if (s.stock[id] <= 0 && !this.quiet) {
+        this.toast(`「${D.dishes[id].name}」賣完了！`, 'info');
+        if (!this.sellable().length) this.toast('所有菜色都賣完了，客人不會上門，等明天 10 點到貨', 'bad');
+      }
+      return id;
+    }
+
+    stockTotal() {
+      let n = 0;
+      for (const v of Object.values(this.s.stock)) n += v;
+      return n;
+    }
+
+    /**
+     * 每天 10 點到貨：依每日進貨量（上架的菜、依菜單順序）進貨，付食材成本，庫存不會過期；
+     * 超過倉儲容量的部分不進貨（也不付錢），金幣不夠就買得起多少進多少。
+     * 全部庫存都是 0 又買不起任何一份時，供應商會賒帳補一點最便宜的菜，免得店面卡死。
+     */
+    deliver() {
+      const s = this.s;
+      s.stockDay = s.day;
+      let room = Math.max(0, this.storageCap - this.stockTotal());
+      let units = 0;
+      let spent = 0;
+      let short = false;
+      for (const id of s.menu) {
+        let n = Math.min(s.order[id] || 0, room);
+        if (n <= 0) continue;
+        const cost = D.dishes[id].cost;
+        if (s.coins < cost * n) {
+          n = Math.floor(s.coins / cost);
+          short = true;
+        }
+        if (n <= 0) continue;
+        s.coins -= cost * n;
+        s.stock[id] = (s.stock[id] || 0) + n;
+        room -= n;
+        units += n;
+        spent += cost * n;
+      }
+      let credit = 0;
+      if (!this.sellable().length) {
+        const cheap = s.menu.filter((id) => this.cookable(id)).sort((a, b) => D.dishes[a].cost - D.dishes[b].cost)[0];
+        if (cheap) {
+          credit = D.STOCK.creditQty;
+          s.stock[cheap] = (s.stock[cheap] || 0) + credit;
+        }
+      }
+      this.procureToday += spent;
+      this.emit('delivery', { units, spent, short, credit });
+      if (!this.quiet) {
+        if (units > 0 || credit) this.toast(`食材到貨：${units} 份，花費 ${spent} 金幣${short ? '（金幣不夠，沒有全部進貨）' : ''}${credit ? `；供應商賒帳補了 ${credit} 份最便宜的菜` : ''}`, short ? 'bad' : 'info');
+        else if (s.menu.length) this.toast('今天沒有進貨（每日進貨量是 0，或倉庫已滿）', 'info');
+      }
+      this.changed();
+    }
+
+    /** 設定某道菜的每日進貨量（0～999） */
+    setOrder(id, n) {
+      const s = this.s;
+      if (!s.menu.includes(id)) return this.fail('這道菜還沒上架');
+      n = Math.round(+n);
+      if (!(n >= 0 && n <= D.STOCK.orderMax)) return this.fail(`進貨量要在 0～${D.STOCK.orderMax} 之間`);
+      s.order[id] = n;
+      return this.done();
+    }
+
+    /** 把每日進貨量平均分給上架的菜（依目前等級預估一天的客人數）；回傳設定後的總量 */
+    autoOrder() {
+      const s = this.s;
+      if (!s.menu.length) return this.fail('菜單是空的');
+      const q = RC.state.defaultOrderQty(s.menu.length, s.level);
+      for (const id of s.menu) s.order[id] = q;
+      return this.done();
+    }
+
+    /** 上架（最多 20 道，必須是學會的菜） */
+    addMenu(id) {
+      const s = this.s;
+      if (!s.dishes[id]) return this.fail('還沒學會這道菜');
+      if (s.menu.includes(id)) return this.fail('已經上架了');
+      if (s.menu.length >= D.STOCK.menuMax) return this.fail(`菜單已滿（最多 ${D.STOCK.menuMax} 道），先下架一道`);
+      s.menu.push(id);
+      if (s.order[id] == null) s.order[id] = RC.state.defaultOrderQty(s.menu.length, s.level);
+      return this.done();
+    }
+
+    /** 下架（庫存留著，再上架還能賣）；至少要留一道 */
+    removeMenu(id) {
+      const s = this.s;
+      if (!s.menu.includes(id)) return this.fail('這道菜沒有上架');
+      if (s.menu.length <= 1) return this.fail('菜單至少要有一道菜');
+      s.menu = s.menu.filter((x) => x !== id);
+      return this.done();
+    }
+
+    /* ───────── 成就 ───────── */
+
+    /** 成就帶來的永久加成：售價（全部／某一類）、烹飪時間 */
+    achPerks() {
+      const ach = this.s.ach;
+      if (this._perkSrc === ach && this._perkN === Object.keys(ach).length) return this._perks;
+      const perks = { price: 0, cook: 0, priceCat: {} };
+      for (const id of Object.keys(ach)) {
+        const a = D.achievements[id];
+        if (!a || !a.perk) continue;
+        if (a.perk.price) {
+          if (a.perk.priceCat) perks.priceCat[a.perk.priceCat] = (perks.priceCat[a.perk.priceCat] || 0) + a.perk.price;
+          else perks.price += a.perk.price;
+        }
+        if (a.perk.cook) perks.cook += a.perk.cook;
+      }
+      this._perkSrc = ach;
+      this._perkN = Object.keys(ach).length;
+      this._perks = perks;
+      return perks;
+    }
+
+    /** 某個成就目前的進度 { have, need } */
+    achProgress(a) {
+      const dishes = this.s.dishes;
+      const list = D.dishList;
+      switch (a.type) {
+        case 'learn': return { have: Object.keys(dishes).length, need: a.n };
+        case 'catlearn': return { have: list.filter((d) => d.cat === a.cat && dishes[d.id]).length, need: a.n };
+        case 'catmaster': return { have: list.filter((d) => d.cat === a.cat && dishes[d.id] && D.masteryLevel(dishes[d.id].cooked) >= 3).length, need: a.n };
+        case 'cook': return { have: Math.max(0, ...Object.values(dishes).map((x) => x.cooked)), need: a.n };
+        case 'master': return { have: Object.values(dishes).filter((x) => D.masteryLevel(x.cooked) >= D.MASTERY_MAX).length, need: a.n };
+        default: return { have: 0, need: 1 };
+      }
+    }
+
+    /** 檢查有沒有新達成的成就：發獎金、跳通知 */
+    checkAchievements() {
+      const s = this.s;
+      for (const a of D.ACHIEVEMENTS) {
+        if (s.ach[a.id]) continue;
+        const p = this.achProgress(a);
+        if (p.have < p.need) continue;
+        s.ach[a.id] = true;
+        s.coins += a.reward;
+        this._perkSrc = null;
+        if (!this.quiet) this.toast(`🏆 成就達成：${a.name}！獎金 ${a.reward} 金幣${a.perkText ? `，${a.perkText}` : ''}`, 'good');
+        this.emit('achievement', a);
+      }
     }
 
     /** 單一客人起身離開（不處理同組與統計）。 */
@@ -953,8 +1134,14 @@
           c.t -= dt;
           if (c.t <= 0) {
             c.dish = this.pickDish();
-            c.state = 'wait_order';
-            c.p = 1;
+            if (!c.dish) {
+              // 想點的菜都賣完了：客人掃興離開（不算差評）
+              this.s.stats.walkouts++;
+              this.sendParty(c.party, false);
+            } else {
+              c.state = 'wait_order';
+              c.p = 1;
+            }
           }
           break;
         case 'wait_order':
@@ -1182,8 +1369,10 @@
     claimStove(m) {
       if (this.cleanPlates() < 1) return false; // 沒有乾淨的盤子，要等人洗
       let best = null;
+      const c0 = m.job && this.customerById(m.job.cid);
+      const need = c0 && c0.dish ? D.stoveTier(D.dishes[c0.dish].stove) : 0;
       for (const st of this.stoves) {
-        if (this.stoveBusy.has(st.uid)) continue;
+        if (this.stoveBusy.has(st.uid) || st.tier < need) continue; // 爐灶等級要夠煮這道菜
         const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), st.access);
         if (!r) continue;
         // 偏好近的、也偏好快的爐灶
@@ -1377,7 +1566,9 @@
         case 'cooking':
           m.t -= dt;
           if (m.t <= 0) {
-            this.s.dishes[c.dish].cooked++;
+            const dr = this.s.dishes[c.dish];
+            dr.cooked++;
+            if (ACH_AT.has(dr.cooked)) this.checkAchievements();
             if (this.stoveBusy.get(m.stove) === m.id) this.stoveBusy.delete(m.stove);
             m.stove = null;
             m.carry = c.dish;
@@ -1685,6 +1876,13 @@
       if (s.coins < d.learn) return this.fail('金幣不足');
       s.coins -= d.learn;
       s.dishes[id] = { cooked: 0 };
+      // 有空位就直接上架，並試做備一點料
+      if (s.menu.length < D.STOCK.menuMax) {
+        s.menu.push(id);
+        s.order[id] = RC.state.defaultOrderQty(s.menu.length, s.level);
+        s.stock[id] = (s.stock[id] || 0) + D.STOCK.newDishQty;
+      }
+      this.checkAchievements();
       return this.done();
     }
 

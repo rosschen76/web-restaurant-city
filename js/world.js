@@ -228,7 +228,7 @@
           }
         }
       }
-      if (access.length) stoves.push({ uid: it.uid, id: it.id, x: it.x, y: it.y, speed: def.speed || 1, access });
+      if (access.length) stoves.push({ uid: it.uid, id: it.id, x: it.x, y: it.y, speed: def.speed || 1, tier: def.tier || 0, access });
     }
     return stoves;
   }

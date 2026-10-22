@@ -244,6 +244,7 @@
       else if (!g.sinks.length) msg = '沒有洗碗槽！髒餐具沒地方洗，盤子用完就沒辦法出菜了。到「商店」買一個。';
       else if (g.cleanPlates() < 1 && g.dirty.size + g.s.sinkDirty > 0) msg = '乾淨的盤子用完了，等員工洗好碗才能繼續出菜（多買盤子或多請人洗碗）。';
       else if (!g.stoves.length) msg = '沒有可用的爐灶！到「商店」買一座，並放在有空位站人的地方。';
+      else if (g.stockOn && g.s.menu.length && !g.sellable().length) msg = g.s.menu.some((id) => g.cookable(id)) ? `菜都賣完了，客人不會上門！每天 ${D.STOCK.deliveryHour}:00 到貨，到「菜單 → 進貨」調整進貨量。` : '菜單上的菜，爐灶都煮不動！到「商店」升級爐灶，或到「菜單」換上煮得動的菜。';
       else if (!g.seats.length) msg = '沒有座位！椅子必須緊鄰桌子，客人才會入座。';
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
       else if (g.queuePeople() >= 4) msg = `門外有 ${g.queuePeople()} 人在候位：增加桌椅（或更大的桌子）可以讓更多人入座。`;
@@ -312,7 +313,7 @@
       if (this.panel && this.panel.name === name && this.panel.overlay) return;
       this.closePanel(true);
       const def = PANELS[name];
-      this.panel = { name, tab: tab || (name === 'shop' ? 'table' : name === 'settings' ? 'main' : name === 'staff' ? 'crew' : null) };
+      this.panel = { name, tab: tab || (name === 'shop' ? 'table' : name === 'settings' ? 'main' : name === 'staff' ? 'crew' : name === 'menu' ? 'shelf' : null) };
       const overlay = document.createElement('div');
       overlay.className = 'overlay';
       overlay.innerHTML = `<div class="win pbox"><div class="win-head"><div class="t">${ic(def.icon, 2)}<span>${def.title}</span></div><div class="x" data-act="close">✕</div></div><div class="tabs-slot"></div><div class="win-body"></div></div>`;
@@ -382,7 +383,7 @@
             <div class="sub">${'★'.repeat(x.stars)}${'☆'.repeat(D.MAX_STARS - x.stars)}　風評 ${rep}　${x.room.w}×${x.room.h}　員工 ${x.staff} 位</div>
             <div class="sub">正店長：${x.head ? esc(x.head) : '—'}　副店長：${x.deputy ? esc(x.deputy) + (x.deputyCanCollect ? '' : `（Lv.${D.DAY.managerLevel} 才能結帳）`) : '—'}</div>
             ${warn.map((w) => `<div class="sub bad">⚠ ${esc(w)}</div>`).join('')}
-            ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪 ${fmt(rp.wages)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
+            ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪與福利 ${fmt(rp.wages)}，進貨 ${fmt(rp.procure || 0)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
             </div>
             <div>${x.active ? '' : `<button class="btn small primary" data-act="goto-store" data-id="${x.id}">前往</button>`}
             ${x.kind === 'branch' ? `<button class="btn small danger" data-act="close-branch" data-id="${x.id}">關閉</button>` : ''}</div></div>`;
@@ -512,7 +513,7 @@
       switch (p.name) {
         case 'shop': tabs = SHOP_TABS; html = this.htmlShop(p.tab); break;
         case 'inv': html = this.htmlInventory(); break;
-        case 'menu': html = this.htmlMenu(); break;
+        case 'menu': tabs = [{ id: 'shelf', name: '菜單' }, { id: 'learn', name: '學習' }, { id: 'stock', name: '進貨' }, { id: 'ach', name: '成就' }]; html = this.htmlMenu(p.tab); break;
         case 'staff': tabs = [{ id: 'crew', name: '員工' }, { id: 'hire', name: '招聘' }, { id: 'sched', name: '排班' }]; html = p.tab === 'sched' ? this.htmlSchedule() : p.tab === 'hire' ? this.htmlRecruit() : this.htmlStaff(); break;
         case 'quest': html = this.htmlQuests(); break;
         case 'company': html = this.htmlCompany(); break;
@@ -652,26 +653,144 @@
         .join('')}</div>`;
     }
 
-    htmlMenu() {
+    /** 菜單面板：學習、菜單（上架）、進貨、成就四個分頁 */
+    htmlMenu(tab) {
+      if (tab === 'shelf') return this.htmlShelf();
+      if (tab === 'stock') return this.htmlStock();
+      if (tab === 'ach') return this.htmlAch();
+      return this.htmlLearn();
+    }
+
+    /** 類別篩選列：全部＋ 10 類（顯示學會幾道） */
+    catChips(cur) {
+      const s = this.game.s;
+      const chip = (id, name, n) => `<button class="chip ${cur === id ? 'on' : ''}" data-act="menu-cat" data-cat="${id}">${name}${n != null ? ` <small>${n}</small>` : ''}</button>`;
+      return `<div class="chips">${chip('all', '全部', `${Object.keys(s.dishes).length}/${D.dishList.length}`)}${D.DISH_CATS.map((c) => chip(c.id, c.name, `${D.dishList.filter((d) => d.cat === c.id && s.dishes[d.id]).length}/10`)).join('')}</div>`;
+    }
+
+    stars(m) {
+      return Array.from({ length: D.MASTERY_MAX }, (_, i) => (i < m ? '★' : '<span class="off">★</span>')).join('');
+    }
+
+    /** 這道菜的爐灶需求（目前這間店煮不煮得動） */
+    stoveTag(d) {
+      const ok = this.game.cookable(d.id);
+      const name = D.STOVE_TIERS[D.stoveTier(d.stove)].name;
+      return `<span class="tag ${ok ? '' : 'warn'}" title="需要${name}（含以上）">${ok ? '' : '⚠ '}${name}</span>`;
+    }
+
+    htmlLearn() {
       const g = this.game;
       const s = g.s;
-      return `<div class="sub" style="margin:0 3px 4px">客人會從「已學會」的菜色中隨機點餐。同一道菜做得越多，熟練度越高（售價 +8%、烹飪時間 −5% / 級）。</div>` + D.dishList
+      const cat = this.panel.cat || 'all';
+      const list = D.dishList.filter((d) => cat === 'all' || d.cat === cat).sort((a, b) => a.level - b.level || a.learn - b.learn);
+      const rows = list
         .map((d) => {
           const info = g.dishInfo(d.id);
           const locked = s.level < d.level;
+          const cname = D.dishCats[d.cat].name;
           if (info.learned) {
             const next = D.MASTERY_STEPS[info.mastery] || null;
-            const stars = Array.from({ length: 5 }, (_, i) => (i < info.mastery ? '★' : `<span class="off">★</span>`)).join('');
+            const on = s.menu.includes(d.id);
             return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(d.id, 3, 'dish')}" width="36" height="36" alt=""></div>
-              <div class="grow"><div class="nm">${d.name} <span class="mastery">${stars}</span></div>
-              <div class="sub">售價 ${ic('coin', 1)}${info.price}　烹飪 ${d.cook}s　已烹飪 ${fmt(info.cooked)} 次${next ? `（下一級 ${next} 次）` : '（熟練度最高）'}</div></div></div>`;
+              <div class="grow"><div class="nm">${d.name} <span class="mastery">${this.stars(info.mastery)}</span> ${on ? '<span class="tag good">上架中</span>' : ''}</div>
+              <div class="sub">${cname} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s</div>
+              <div class="sub">已烹飪 ${fmt(info.cooked)} 次${next ? `（下一級 ${fmt(next)} 次）` : '（大師）'}</div></div></div>`;
           }
           const lack = s.coins < d.learn;
           return `<div class="row ${locked ? 'dim' : ''}"><div class="ico"><img class="px" src="${AP.iconURL(d.id, 3, 'dish')}" width="36" height="36" alt="" style="${locked ? 'filter:brightness(0.2)' : ''}"></div>
-            <div class="grow"><div class="nm">${locked ? '？？？' : d.name}</div><div class="sub">${locked ? `Lv.${d.level} 解鎖` : `售價 ${ic('coin', 1)}${d.price}　烹飪 ${d.cook}s`}</div></div>
+            <div class="grow"><div class="nm">${locked ? '？？？' : d.name}</div><div class="sub">${locked ? `${cname}　Lv.${d.level} 解鎖` : `${cname} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${d.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s`}</div></div>
             ${locked ? `<span class="tag">${ic('lock', 1)} Lv.${d.level}</span>` : `<button class="btn primary" data-act="learn" data-id="${d.id}" ${lack ? 'disabled' : ''}>學習 ${ic('coin', 1)}${fmt(d.learn)}</button>`}</div>`;
         })
         .join('');
+      return `<div class="sub" style="margin:0 3px 4px">共 ${D.dishList.length} 道菜。學會的菜到「菜單」分頁上架（每間店最多 ${D.STOCK.menuMax} 道）。同一道菜做得越多，熟練度越高（最高 ${D.MASTERY_MAX} 級：售價 +8%、烹飪時間 −5% / 級）。每道菜需要等級夠的爐灶才煮得動。</div>${this.catChips(cat)}${rows}`;
+    }
+
+    htmlShelf() {
+      const g = this.game;
+      const s = g.s;
+      const cat = this.panel.cat || 'all';
+      const full = s.menu.length >= D.STOCK.menuMax;
+      const onRows = s.menu
+        .map((id) => {
+          const d = D.dishes[id];
+          const info = g.dishInfo(id);
+          const stock = s.stock[id] || 0;
+          const warn = !g.cookable(id) ? `` : '';
+          return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(id, 3, 'dish')}" width="36" height="36" alt=""></div>
+            <div class="grow"><div class="nm">${d.name} <span class="mastery">${this.stars(info.mastery)}</span></div>
+            <div class="sub">${D.dishCats[d.cat].name} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>${stock <= 0 ? ' <span class="bad">賣完了</span>' : ''}</div></div>
+            <button class="btn small" data-act="menu-remove" data-id="${id}">下架</button></div>`;
+        })
+        .join('');
+      const learned = D.dishList
+        .filter((d) => s.dishes[d.id] && !s.menu.includes(d.id) && (cat === 'all' || d.cat === cat))
+        .sort((a, b) => a.level - b.level)
+        .map((d) => {
+          const info = g.dishInfo(d.id);
+          return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(d.id, 3, 'dish')}" width="36" height="36" alt=""></div>
+            <div class="grow"><div class="nm">${d.name} <span class="mastery">${this.stars(info.mastery)}</span></div>
+            <div class="sub">${D.dishCats[d.cat].name} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　成本 ${ic('coin', 1)}${d.cost}　庫存 ${s.stock[d.id] || 0}</div></div>
+            <button class="btn small primary" data-act="menu-add" data-id="${d.id}" ${full ? 'disabled' : ''}>上架</button></div>`;
+        })
+        .join('');
+      return `<div class="section-title" style="margin-top:0">「${esc(s.name)}」的菜單 ${s.menu.length} / ${D.STOCK.menuMax}${full ? '（已滿，先下架才能換新菜）' : ''}</div>
+        <div class="sub" style="margin:2px 3px">客人只會點上架、有庫存、而且爐灶煮得動的菜。每間店的菜單各自設定。</div>${onRows}
+        <div class="section-title">可以上架的菜</div>${this.catChips(cat)}${learned || '<div class="empty">沒有其他學會的菜可以上架。到「學習」分頁學新菜吧。</div>'}`;
+    }
+
+    htmlStock() {
+      const g = this.game;
+      const s = g.s;
+      const total = g.stockTotal();
+      const cap = g.storageCap;
+      const pct = Math.min(100, Math.round((total / cap) * 100));
+      let planUnits = 0;
+      let planCost = 0;
+      let room = Math.max(0, cap - total);
+      for (const id of s.menu) {
+        const n = Math.min(s.order[id] || 0, room);
+        room -= n;
+        planUnits += n;
+        planCost += n * D.dishes[id].cost;
+      }
+      const rows = s.menu
+        .map((id) => {
+          const d = D.dishes[id];
+          const q = s.order[id] || 0;
+          const stock = s.stock[id] || 0;
+          return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(id, 3, 'dish')}" width="36" height="36" alt=""></div>
+            <div class="grow"><div class="nm">${d.name}</div>
+            <div class="sub">庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>　成本 ${ic('coin', 1)}${d.cost} / 份　每日 ${ic('coin', 1)}${fmt(q * d.cost)}</div>
+            <div class="sub order-row">每日進貨 <button class="btn small" data-act="order-step" data-id="${id}" data-d="-10">−10</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="-1">−1</button><b class="ord">${q}</b><button class="btn small" data-act="order-step" data-id="${id}" data-d="1">+1</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="10">+10</button></div></div></div>`;
+        })
+        .join('');
+      return `<div class="section-title" style="margin-top:0">倉庫 ${total} / ${cap} 份（冰箱越多、越高級，容量越大）</div>
+        <div class="bar" style="margin:4px 3px"><i style="width:${pct}%"></i></div>
+        <div class="sub" style="margin:4px 3px;line-height:1.6">每天 <b>${D.STOCK.deliveryHour}:00</b> 固定到貨：照下面的「每日進貨量」進貨，付食材成本；食材不會過期，賣完為止。今天的預計進貨 ${planUnits} 份、${ic('coin', 1)}${fmt(planCost)}（目前有 ${fmt(s.coins)}）。超過容量的部分不進貨；金幣不夠就買得起多少進多少。</div>
+        <div style="margin:6px 3px"><button class="btn primary" data-act="order-auto">依等級自動分配進貨量</button></div>${rows || '<div class="empty">菜單是空的，先到「菜單」分頁上架。</div>'}`;
+    }
+
+    htmlAch() {
+      const g = this.game;
+      const s = g.s;
+      const done = D.ACHIEVEMENTS.filter((a) => s.ach[a.id]).length;
+      const perks = D.ACHIEVEMENTS.filter((a) => s.ach[a.id] && a.perkText).map((a) => a.perkText);
+      const groups = [...new Set(D.ACHIEVEMENTS.map((a) => a.group))];
+      const body = groups
+        .map((gr) => `<div class="section-title">${gr}</div>` + D.ACHIEVEMENTS.filter((a) => a.group === gr)
+          .map((a) => {
+            const p = g.achProgress(a);
+            const ok = !!s.ach[a.id];
+            const pct = Math.min(100, Math.round((p.have / p.need) * 100));
+            return `<div class="row ${ok ? 'cur' : ''}"><div class="ico">${ic(ok ? 'star' : 'lock', 3)}</div>
+              <div class="grow"><div class="nm">${a.name} ${ok ? '<span class="tag good">達成</span>' : ''}</div>
+              <div class="sub">${a.desc}　獎金 ${ic('coin', 1)}${fmt(a.reward)}${a.perkText ? `　<b>${a.perkText}</b>` : ''}</div>
+              ${ok ? '' : `<div class="bar" style="max-width:220px"><i style="width:${pct}%"></i></div><div class="bar-label">${Math.min(p.have, p.need)} / ${p.need}</div>`}</div></div>`;
+          })
+          .join(''))
+        .join('');
+      return `<div class="sub" style="margin:0 3px 4px">已達成 <b>${done} / ${D.ACHIEVEMENTS.length}</b>。成就是整間公司共用的，達成會發獎金；類別精通與百味宗師還有永久加成。${perks.length ? `<br>目前的加成：${perks.join('、')}` : ''}</div>${body}`;
     }
 
     /** 員工分頁：目前的店掌櫃與員工（日薪、欠薪、班別、體力） */
@@ -1065,6 +1184,11 @@
         case 'place-inv': this.closePanel(true); this.startPlacing(id); break;
         case 'sell-inv': res(g.sellFromInventory(id), 'coin'); break;
         case 'learn': res(g.learnDish(id), 'buy'); break;
+        case 'menu-cat': this.panel.cat = el.dataset.cat; A.sfx('click'); this.renderPanel(); break;
+        case 'menu-add': res(g.addMenu(id), 'buy'); break;
+        case 'menu-remove': res(g.removeMenu(id), 'click'); break;
+        case 'order-step': res(g.setOrder(id, Math.max(0, (g.s.order[id] || 0) + +el.dataset.d)), 'click'); break;
+        case 'order-auto': res(g.autoOrder(), 'buy'); break;
         case 'theme': res(g.buyTheme(el.dataset.kind, id), 'buy'); this.view.layout(); break;
         case 'expand': {
           const r = res(g.expand(), 'levelup');

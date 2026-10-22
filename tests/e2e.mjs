@@ -132,6 +132,7 @@ await scenario('客人吃完頭上出現金幣，掌櫃走過去結帳，付完�
   // 推進到有客人吃完、等結帳
   const info = await G(page, () => {
     const g = window.__game.game;
+    g.s.stockDay = g.s.day; // 這個情境只看收款，今天不要進貨（10 點的進貨會扣金幣）
     for (let i = 0; i < 3000 && !g.customers.some((c) => c.state === 'wait_pay'); i++) g.update(0.1);
     const c = g.customers.find((x) => x.state === 'wait_pay');
     return c ? { id: c.id, seatTaken: g.seatTaken.get(c.seat) === c.id, coins: g.s.coins } : null;
@@ -486,6 +487,39 @@ await scenario('加薪：員工面板有 0～20% 滑桿，調整後日薪與能�
   assert.ok(after[1] > before[1]);
   const txt = await page.locator('.win-body').innerText();
   assert.ok(txt.includes('＋20%') && txt.includes('加薪加成'), txt);
+});
+
+await scenario('菜單面板：學習／菜單／進貨／成就四個分頁；學會新菜自動上架、可下架上架、調整每日進貨量、賣完有提示', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 50000; g.s.level = 12; });
+  await page.click('.bottom-bar [data-act=open-menu]');
+  assert.deepEqual(await page.locator('.tabs .tab').allInnerTexts(), ['菜單', '學習', '進貨', '成就']);
+  assert.ok((await page.locator('.win-body').innerText()).includes('1 / 20'), '預設菜單只有蛋餅');
+  // 學習：類別篩選＋學會一道
+  await page.click('[data-tab=learn]');
+  assert.equal(await page.locator('.chip').count(), 11, '全部 + 10 類');
+  await page.click('.chip[data-cat=drink]');
+  await page.click('[data-act=learn][data-id=soymilk]');
+  assert.equal(await G(page, () => window.__game.game.s.menu.includes('soymilk')), true, '學會後自動上架');
+  // 菜單：下架／上架
+  await page.click('[data-tab=shelf]');
+  await page.click('[data-act=menu-remove][data-id=soymilk]');
+  assert.equal(await G(page, () => window.__game.game.s.menu.includes('soymilk')), false);
+  await page.click('[data-act=menu-add][data-id=soymilk]');
+  assert.equal(await G(page, () => window.__game.game.s.menu.includes('soymilk')), true);
+  // 進貨：每日進貨量
+  await page.click('[data-tab=stock]');
+  const before = await G(page, () => window.__game.game.s.order.danbing);
+  await page.click('[data-act=order-step][data-id=danbing][data-d="10"]');
+  assert.equal(await G(page, () => window.__game.game.s.order.danbing), before + 10);
+  assert.ok((await page.locator('.win-body').innerText()).includes('10:00'), '說明每天 10:00 到貨');
+  // 成就
+  await page.click('[data-tab=ach]');
+  assert.ok((await page.locator('.win-body').innerText()).includes('百味宗師'));
+  await page.click('[data-act=close]');
+  // 全部賣完：HUD 警告
+  await G(page, () => { const g = window.__game.game; g.s.stock = {}; g.changed(); });
+  await page.waitForFunction(() => document.querySelector('#warn') && document.querySelector('#warn').textContent.includes('賣完'), null, { timeout: 4000 });
 });
 
 await scenario('員工福利：員工面板有福利金與分紅滑桿（0～20%），顯示士氣，調整後生效並可存檔', async (page) => {
