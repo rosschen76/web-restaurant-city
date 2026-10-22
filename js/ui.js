@@ -114,6 +114,7 @@
         </div>
         <div class="edit-bar pbox" id="editbar" hidden>
           <span class="hint" id="edithint"></span>
+          <button class="btn small" data-act="auto-orient-all" title="椅子面向桌子、收銀機／冰箱／點唱機正面朝向走道">⟳ 整理方向</button>
           <button class="btn small" data-act="open-inv">${ic('box', 1)} 倉庫</button>
           <button class="btn small" data-act="open-shop">${ic('shop', 1)} 商店</button>
           <button class="btn small primary" data-act="toggle-edit">${ic('check', 1)} 完成</button>
@@ -1344,6 +1345,19 @@
         case 'yes': { const f = this._yes; this.closePanel(true); this._yes = null; f && f(); break; }
         case 'no': this.closePanel(); break;
         case 'item-rotate': this.rotateSelected(); break;
+        case 'item-autorot': {
+          const uid = this.view.selectedItem;
+          const r = uid != null ? g.autoRotateItem(uid) : { ok: false, msg: '' };
+          A.sfx(r.ok ? 'place' : 'error');
+          if (r.ok && !r.changed) this.toast('方向已經是最合適的了');
+          break;
+        }
+        case 'auto-orient-all': {
+          const r = g.autoRotateAll();
+          A.sfx('place');
+          this.toast(r.changed ? `已自動調整 ${r.changed} 件家具的方向` : '所有椅子與家具的方向都已經合適');
+          break;
+        }
         case 'item-move': {
           const it = g.s.items.find((i) => i.uid === this.view.selectedItem);
           if (it) this.startPlacing(it.id, it.uid, it.rot);
@@ -1410,7 +1424,7 @@
 
     updateEditHint() {
       let t = '上視圖：點選家具可移動、旋轉、收起或賣出';
-      if (this.placing) t = '點擊格子放置　R 旋轉　Esc 取消';
+      if (this.placing) t = RC.world.isOriented(this.placing.def) ? `點擊格子放置　${this.placing.auto ? '自動朝向中，按 R 手動旋轉' : 'R 旋轉'}　Esc 取消` : '點擊格子放置　R 旋轉　Esc 取消';
       else if (this.view.selectedItem != null) t = '拖曳家具或用工具列操作';
       this.setText(this.el.edithint, t);
     }
@@ -1419,7 +1433,7 @@
       if (!this.edit) this.setEdit(true);
       this.deselect();
       const def = D.furniture[id];
-      this.placing = { id, rot: rot != null ? rot : 0, fromUid: fromUid || null, drag: false, def };
+      this.placing = { id, rot: rot != null ? rot : 0, fromUid: fromUid || null, drag: false, def, auto: RC.world.isOriented(def) }; // auto：自動朝向（椅子面向桌子、正面朝向走道），按 R 旋轉就改成手動
       this.updateGhost();
       this.updateEditHint();
       document.getElementById('game').classList.add('placing');
@@ -1440,15 +1454,19 @@
         this.view.ghost = null;
         return;
       }
-      const ok = RC.world.canPlace(this.game.grid, p.def, x, y, p.rot, p.fromUid).ok;
-      this.view.ghost = { id: p.id, rot: p.rot, tx: x, ty: y, ok };
+      const rot = p.auto ? RC.world.suggestRot(this.game.grid, p.def, x, y, p.rot, p.fromUid) : p.rot;
+      const ok = RC.world.canPlace(this.game.grid, p.def, x, y, rot, p.fromUid).ok;
+      this.view.ghost = { id: p.id, rot, tx: x, ty: y, ok };
     }
 
     rotateSelected() {
       const g = this.game;
       if (this.placing) {
-        this.placing.rot = (this.placing.rot + 1) & 3;
+        const gh = this.view.ghost;
+        this.placing.rot = ((this.placing.auto && gh ? gh.rot : this.placing.rot) + 1) & 3;
+        this.placing.auto = false; // 手動轉過就不再自動朝向
         this.updateGhost();
+        this.updateEditHint();
         RC.audio.sfx('click');
       } else if (this.view.selectedItem != null) {
         const r = g.rotateItem(this.view.selectedItem);
@@ -1495,7 +1513,7 @@
       if (el.hidden || force) {
         el.hidden = false;
         const canRotate = def.rot || def.cat === 'chair';
-        el.innerHTML = `${canRotate ? '<button class="btn" data-act="item-rotate">↻ 旋轉</button>' : ''}<button class="btn" data-act="item-move">移動</button><button class="btn" data-act="item-store">收起</button><button class="btn danger" data-act="item-sell">賣 ${fmt(Math.floor(def.price / 2))}</button>`;
+        el.innerHTML = `${canRotate ? '<button class="btn" data-act="item-rotate">↻ 旋轉</button>' : ''}${RC.world.isOriented(def) ? '<button class="btn" data-act="item-autorot">⟳ 自動轉向</button>' : ''}<button class="btn" data-act="item-move">移動</button><button class="btn" data-act="item-store">收起</button><button class="btn danger" data-act="item-sell">賣 ${fmt(Math.floor(def.price / 2))}</button>`;
       }
     }
 
@@ -1777,7 +1795,7 @@
           return;
         }
         const g = this.game;
-        const r = pl.fromUid ? g.moveItem(pl.fromUid, gh.tx, gh.ty, pl.rot) : g.placeFromInventory(pl.id, gh.tx, gh.ty, pl.rot);
+        const r = pl.fromUid ? g.moveItem(pl.fromUid, gh.tx, gh.ty, gh.rot) : g.placeFromInventory(pl.id, gh.tx, gh.ty, gh.rot);
         if (r.ok) {
           RC.audio.sfx('place');
           if (pl.fromUid || !(g.s.inventory[pl.id] > 0)) {

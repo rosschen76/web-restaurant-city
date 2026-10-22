@@ -143,11 +143,11 @@
     { id: 'stove_steam', name: '蒸籠灶', cat: 'stove', w: 1, h: 1, price: 1800, level: 8, appeal: 2, speed: 1.5, tier: 2, desc: '蒸氣十足，烹飪速度 ×1.5，可以煮需要「蒸籠灶」的菜。' },
     { id: 'stove_pro', name: '專業爐台', cat: 'stove', w: 1, h: 1, price: 6000, level: 13, appeal: 4, speed: 1.85, tier: 3, desc: '專業餐廳等級，烹飪速度 ×1.85，什麼菜都煮得動。' },
     // 功能
-    { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
+    { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', front: true, rot: true, desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
     { id: 'sink', name: '洗碗槽', cat: 'func', w: 1, h: 1, price: 300, level: 1, appeal: 0, fn: 'sink', desc: '客人用過的餐具要送到這裡，由員工洗乾淨；沒有乾淨的盤子就不能出餐。多一個洗碗槽，可以讓更多人同時洗碗。' },
-    { id: 'fridge', name: '小冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', cap: 50, desc: '多放 50 份食材；食材取用方便，烹飪時間 -6%（冰箱類最多 3 台生效）。' },
-    { id: 'fridge_big', name: '雙門冷藏櫃', cat: 'func', w: 1, h: 1, price: 4200, level: 12, appeal: 3, fn: 'fridge', cap: 140, desc: '多放 140 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
-    { id: 'freezer', name: '專業冷凍庫', cat: 'func', w: 1, h: 1, price: 14000, level: 20, appeal: 5, fn: 'fridge', cap: 320, desc: '多放 320 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
+    { id: 'fridge', name: '小冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', front: true, rot: true, cap: 50, desc: '多放 50 份食材；食材取用方便，烹飪時間 -6%（冰箱類最多 3 台生效）。' },
+    { id: 'fridge_big', name: '雙門冷藏櫃', cat: 'func', w: 1, h: 1, price: 4200, level: 12, appeal: 3, fn: 'fridge', front: true, rot: true, cap: 140, desc: '多放 140 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
+    { id: 'freezer', name: '專業冷凍庫', cat: 'func', w: 1, h: 1, price: 14000, level: 20, appeal: 5, fn: 'fridge', front: true, rot: true, cap: 320, desc: '多放 320 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
     // 裝飾
     { id: 'plant_pot', name: '小盆栽', cat: 'decor', w: 1, h: 1, price: 70, level: 1, appeal: 2, desc: '一抹綠意。' },
     { id: 'lantern', name: '紅燈籠', cat: 'decor', w: 1, h: 1, price: 140, level: 2, appeal: 4, desc: '喜氣洋洋的落地燈籠。' },
@@ -155,7 +155,7 @@
     { id: 'cat', name: '招財貓', cat: 'decor', w: 1, h: 1, price: 600, level: 5, appeal: 9, desc: '右手招財，左手招客。' },
     { id: 'screen', name: '木雕屏風', cat: 'decor', w: 2, h: 1, price: 900, level: 7, appeal: 10, rot: true, desc: '典雅的兩格屏風。' },
     { id: 'fishtank', name: '水族箱', cat: 'decor', w: 1, h: 1, price: 1500, level: 9, appeal: 15, desc: '看魚也能開胃。' },
-    { id: 'jukebox', name: '點唱機', cat: 'decor', w: 1, h: 1, price: 2200, level: 10, appeal: 18, desc: '復古音樂讓客人心情大好。' },
+    { id: 'jukebox', name: '點唱機', cat: 'decor', w: 1, h: 1, price: 2200, level: 10, appeal: 18, front: true, rot: true, desc: '復古音樂讓客人心情大好。' },
     { id: 'statue', name: '石獅', cat: 'decor', w: 1, h: 1, price: 3000, level: 12, appeal: 22, desc: '鎮守店門的威風石獅。' },
     { id: 'piano', name: '平台鋼琴', cat: 'decor', w: 2, h: 1, price: 6500, level: 14, appeal: 34, rot: true, desc: '現場演奏，格調滿分。' },
   ];

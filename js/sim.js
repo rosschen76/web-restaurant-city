@@ -1927,6 +1927,39 @@
       return this.done();
     }
 
+    /** 把家具轉到建議的方向（椅子面向桌子、收銀機／冰箱／點唱機正面朝向走道）；回傳 changed 表示有沒有變動 */
+    autoRotateItem(uid) {
+      const it = this.s.items.find((i) => i.uid === uid);
+      if (!it) return this.fail('找不到物品');
+      const def = D.furniture[it.id];
+      if (!W.isOriented(def)) return this.fail('這件家具沒有方向');
+      const rot = W.suggestRot(this.grid, def, it.x, it.y, it.rot, uid);
+      const changed = rot !== it.rot;
+      it.rot = rot;
+      if (changed) this.rebuild();
+      const r = this.done();
+      r.changed = changed;
+      return r;
+    }
+
+    /** 全部家具自動轉向；回傳調整了幾件 */
+    autoRotateAll() {
+      let n = 0;
+      for (const it of this.s.items) {
+        const def = D.furniture[it.id];
+        if (!W.isOriented(def)) continue;
+        const rot = W.suggestRot(this.grid, def, it.x, it.y, it.rot, it.uid);
+        if (rot !== it.rot) {
+          it.rot = rot;
+          n++;
+        }
+      }
+      if (n) this.rebuild();
+      const r = this.done();
+      r.changed = n;
+      return r;
+    }
+
     storeItem(uid) {
       const s = this.s;
       const i = s.items.findIndex((x) => x.uid === uid);

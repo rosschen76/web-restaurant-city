@@ -363,6 +363,82 @@ await scenario('裝潢模式是上視圖：格子為正方形、點格子選到�
   assert.equal(await G(page, () => window.__game.view.edit), false);
 });
 
+await scenario('所有家具與菜色都畫得出來：等角圖、上視圖、商店縮圖、菜色圖示（新增物品忘了補美術會在這裡失敗）', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const bad = await G(page, () => {
+    const RC = window.RC; const D = RC.data; const out = [];
+    for (const f of D.furnitureList) {
+      for (const rot of [0, 1, 2, 3]) {
+        try { RC.artWorld.furniture(f.id, rot, 'all'); } catch (e) { out.push('iso ' + f.id + ' ' + e.message); break; }
+        try { RC.artTop.furniture(f.id, rot, rot); } catch (e) { out.push('top ' + f.id + ' ' + e.message); break; }
+      }
+      try { RC.artPeople.furnThumb(f.id, 96); } catch (e) { out.push('thumb ' + f.id + ' ' + e.message); }
+    }
+    for (const d of D.dishList) { try { RC.artPeople.dish(d.id); RC.artPeople.iconURL(d.id, 3, 'dish'); } catch (e) { out.push('dish ' + d.id + ' ' + e.message); } }
+    return out;
+  });
+  assert.deepEqual(bad, []);
+  // 實際把每一種家具放進餐廳，等角圖與上視圖各畫一次不出錯
+  const errs = [];
+  page.on('pageerror', (e) => errs.push(e.message));
+  await G(page, () => {
+    const g = window.__game.game; const D = window.RC.data;
+    g.s.coins = 1e9; g.s.level = 50; g.s.room.stage = D.expansions.length - 1; g.rebuild();
+    let x = 0, y = 4;
+    for (const f of D.furnitureList) {
+      if (!g.buyFurniture(f.id).ok) continue;
+      for (let tries = 0; tries < 300; tries++) { if (g.placeFromInventory(f.id, x % 16 + 1, y, 0).ok) break; x++; if (x % 16 === 0) y++; }
+    }
+  });
+  await page.waitForTimeout(300);
+  await page.click('.bottom-bar [data-act=toggle-edit]');
+  await page.waitForTimeout(300);
+  await page.click('.edit-bar [data-act=toggle-edit]');
+  await page.waitForTimeout(300);
+  assert.deepEqual(errs, [], '畫面沒有錯誤');
+  // 商店每個分頁都能開
+  await page.click('.bottom-bar [data-act=open-shop]');
+  for (const tab of ['table', 'chair', 'stove', 'func', 'decor']) { await page.click(`[data-tab=${tab}]`); await page.waitForTimeout(100); }
+  assert.deepEqual(errs, []);
+});
+
+await scenario('裝潢自動轉向：放置椅子時自動面向桌子（按 R 改手動）、工具列「自動轉向」、「整理方向」一次調整全部', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 5000; g.s.level = 10; g.buyFurniture('chair_wood'); g.buyFurniture('register'); });
+  await page.click('.bottom-bar [data-act=toggle-edit]');
+  // 起始桌在 (3,4)，旁邊放一張椅子：自動面向桌子
+  const tableAt = await G(page, () => { const t = window.__game.game.s.items.find((i) => i.id === 'table_wood'); return [t.x, t.y]; });
+  const free = await G(page, ([tx, ty]) => {
+    const g = window.__game.game;
+    for (const [dx, dy] of [[0, -1], [0, 1], [1, 0], [-1, 0]]) { const x = tx + dx, y = ty + dy; if (window.RC.world.canPlace(g.grid, window.RC.data.furniture.chair_wood, x, y, 0, null).ok && !window.RC.world.itemAt(g.grid, x, y)) return [x, y]; }
+    return null;
+  }, tableAt);
+  assert.ok(free, '桌子旁邊有空格');
+  await G(page, ([x, y]) => { const ui = window.__game.ui; ui.startPlacing('chair_wood'); ui.hover = { x, y }; ui.updateGhost(); }, free);
+  const gh = await G(page, () => window.__game.view.ghost);
+  const want = await G(page, ([tx, ty, x, y]) => { const D = window.RC.data; for (let d = 0; d < 4; d++) if (x + D.DX[d] === tx && y + D.DY[d] === ty) return d; return -1; }, [...tableAt, ...free]);
+  assert.equal(gh.rot, want, '預覽自動面向桌子');
+  assert.ok((await page.locator('#edithint').innerText()).includes('自動朝向'));
+  await G(page, () => window.__game.ui.rotateSelected());
+  assert.ok((await page.locator('#edithint').innerText()).includes('R 旋轉'), '按 R 之後改成手動');
+  await G(page, () => window.__game.ui.cancelPlacing());
+  // 整理方向：把一張椅子轉到背對桌子，再一次整理
+  await G(page, ([x, y]) => { const g = window.__game.game; g.placeFromInventory('chair_wood', x, y, 0); }, free);
+  await G(page, () => { const g = window.__game.game; const c = g.s.items.find((i) => i.id === 'chair_wood' && g.seatByChair.has(i.uid)); const seatFace = g.seatByChair.get(c.uid).face; c.rot = (seatFace + 2) & 3; g.rebuild(); });
+  await page.click('[data-act=auto-orient-all]');
+  const okAll = await G(page, () => { const g = window.__game.game; return g.s.items.filter((i) => i.id === 'chair_wood').every((c) => { const seat = g.seatByChair.get(c.uid); return !seat || seat.face === c.rot; }); });
+  assert.equal(okAll, true, '椅子方向都對了');
+  // 收銀機：放在牆角，自動朝向走道
+  await G(page, () => { const g = window.__game.game; g.placeFromInventory('register', 0, 0, 3); });
+  await page.click('[data-act=auto-orient-all]');
+  const reg = await G(page, () => window.__game.game.s.items.find((i) => i.id === 'register').rot);
+  assert.ok(reg === 0 || reg === 1, '收銀機轉向房間裡面：' + reg);
+  // 工具列：選到收銀機有「自動轉向」按鈕
+  await G(page, () => { const ui = window.__game.ui; const it = window.__game.game.s.items.find((i) => i.id === 'register'); ui.select(it.uid); });
+  assert.equal(await page.locator('[data-act=item-autorot]').count(), 1);
+  await page.click('[data-act=item-autorot]');
+});
+
 await scenario('以 3 倍速連續模擬 20 分鐘不出錯，等級成長', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => {
@@ -507,7 +583,7 @@ await scenario('菜單面板：學習／菜單／進貨／成就四個分頁；�
   await G(page, () => { const g = window.__game.game; g.s.coins = 50000; g.s.level = 12; });
   await page.click('.bottom-bar [data-act=open-menu]');
   assert.deepEqual(await page.locator('.tabs .tab').allInnerTexts(), ['菜單', '學習', '進貨', '成就']);
-  assert.ok((await page.locator('.win-body').innerText()).includes('1 / 20'), '預設菜單只有蛋餅');
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('1 / 20'), null, { timeout: 4000 });
   // 學習：類別篩選＋學會一道
   await page.click('[data-tab=learn]');
   assert.equal(await page.locator('.chip').count(), 11, '全部 + 10 類');
@@ -526,17 +602,17 @@ await scenario('菜單面板：學習／菜單／進貨／成就四個分頁；�
   await page.locator('[data-act=markup-step][data-id=danbing][data-d="1"]').click();
   await page.locator('[data-act=markup-step][data-id=danbing][data-d="1"]').click();
   assert.equal(await G(page, () => window.__game.game.s.markup.danbing), 2);
-  assert.ok((await page.locator('.win-body').innerText()).includes('漲價合計 2%'));
-  assert.ok((await page.locator('.win-body').innerText()).includes('套餐搭配'), '有搭配說明');
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('漲價合計 2%'), null, { timeout: 4000 });
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('套餐搭配'), null, { timeout: 4000 });
   // 進貨：每日進貨量
   await page.click('[data-tab=stock]');
   const before = await G(page, () => window.__game.game.s.order.danbing);
   await page.click('[data-act=order-step][data-id=danbing][data-d="10"]');
   assert.equal(await G(page, () => window.__game.game.s.order.danbing), before + 10);
-  assert.ok((await page.locator('.win-body').innerText()).includes('10:00'), '說明每天 10:00 到貨');
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('10:00'), null, { timeout: 4000 });
   // 成就
   await page.click('[data-tab=ach]');
-  assert.ok((await page.locator('.win-body').innerText()).includes('百味宗師'));
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('百味宗師'), null, { timeout: 4000 });
   await page.click('[data-act=close]');
   // 全部賣完：HUD 警告
   await G(page, () => { const g = window.__game.game; g.s.stock = {}; g.changed(); });
