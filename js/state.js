@@ -46,7 +46,8 @@
       energy: 100,
       boss: !!cand.boss,
       shift: Number.isInteger(cand.shift) ? cand.shift : D.DAY.defaultOpen, // 上班時間（整點）：從這個鐘點起連續 8 小時
-      manager: false, // 值班店長（Lv.10 起可任命）
+      manager: false, // 擔任店長（正店長或副店長）
+      head: false, // 正店長（Lv.10 以上、每間店 1 位）；manager 為 true 而 head 為 false 就是副店長（Lv.8 以上）
       wage: cand.boss ? 0 : Math.max(0, Math.floor(+cand.wage || 0)), // 日薪（每天午夜發放）
       unpaid: 0, // 連續領不到薪水的天數
       raise: 0, // 加薪百分比（0～20）：日薪增加，速度與技術也提升
@@ -85,7 +86,9 @@
     const co = {
       core: {},
       stores: [main],
-      gameMin: hq.gameMin || 0, // 整個公司累計經過的遊戲分鐘（由玩家所在的店推進）
+      gameMin: hq.gameMin || 0, // 整個公司累計經過的遊戲分鐘（由玩家正在檢視的店推進）
+      gm: null, // 總經理（玩家）：有分店之後不再屬於任何一間店；只有主店時玩家是店掌櫃（員工名單裡的 boss）
+      chainDays: 0, // 所有分店風評都低迷的連續天數
       nextStoreId: hq.nextStoreId || 1,
       activeId: 0,
       get active() {
@@ -113,8 +116,8 @@
     add('sink', 3, 0, 0);
   }
 
-  /** 一間新的分店（只有店面自己的欄位）。manager 是派去當店長的員工（已經整理好的員工物件）。 */
-  function newStore(id, name, manager, rng, clockFrom) {
+  /** 一間新的分店（只有店面自己的欄位）。staffList 是派去的正店長與副店長（已經整理好的員工物件）。 */
+  function newStore(id, name, staffList, rng, clockFrom) {
     rng = rng || RC.util.makeRng(Date.now());
     const st = {
       id,
@@ -123,7 +126,7 @@
       room: { stage: 0, floor: 'wood', wall: 'cream' },
       items: [],
       nextUid: 1,
-      staff: manager ? [manager] : [],
+      staff: Array.isArray(staffList) ? staffList : [],
       candidates: [],
       schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
       reputation: 0,
@@ -246,6 +249,7 @@
         boss: !!m.boss,
         shift: Math.floor(num(m.shift, D.DAY.defaultOpen, 0, 23)),
         manager: !!m.manager,
+        head: !!m.head,
         wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1,
         unpaid: Math.floor(num(m.unpaid, 0, 0, D.WAGE_QUIT_DAYS)),
         raise: Math.floor(num(m.raise, 0, 0, D.RAISE.max)),
@@ -263,16 +267,52 @@
       staff.forEach((m, i) => (m.boss = i === (first < 0 ? 0 : first)));
     } else if (hasBoss === false) staff.forEach((m) => (m.boss = false));
     // hasBoss 為 null（分店）：掌櫃旗標照存檔，全公司只能有一位的規則最後統一整理
-    let managers = 0;
+    // 店長編制（雙店長制）：正店長最多 1 位（Lv.10 以上）、副店長最多 1 位（Lv.8 以上）
+    // 舊存檔的「值班店長」：第一位升為正店長
+    if (!staff.some((m) => m.head)) {
+      const first = staff.find((m) => m.manager && !m.boss);
+      if (first && first.level >= D.DAY.managerLevel) first.head = true;
+    }
+    let hasHead = false;
     for (const m of staff) {
-      if (m.manager && (m.boss || m.level < D.DAY.managerLevel || managers >= D.DAY.maxManagers)) m.manager = false;
-      if (m.manager) managers++;
+      if (m.boss) {
+        m.manager = false;
+        m.head = false;
+      } else if (m.head && !hasHead && m.level >= D.DAY.managerLevel) {
+        hasHead = true;
+        m.manager = true;
+      } else m.head = false;
+    }
+    let hasDeputy = false;
+    for (const m of staff) {
+      if (m.manager && !m.head) {
+        if (!hasDeputy && !m.boss && m.level >= D.DAY.deputyLevel) hasDeputy = true;
+        else m.manager = false;
+      }
     }
     // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
     staff.forEach((m, i) => {
       m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i);
       if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
     });
+  }
+
+  /** 總經理（玩家）的身分資料 */
+  function cleanGm(g) {
+    const lk = (g && g.look) || {};
+    return {
+      id: Math.floor(num(g && g.id, 1, 1, 1e9)),
+      name: String((g && g.name) || '阿福').slice(0, 8),
+      look: {
+        skin: Math.floor(num(lk.skin, 0, 0, D.PALETTE.skin.length - 1)),
+        hair: Math.floor(num(lk.hair, 0, 0, D.PALETTE.hair.length - 1)),
+        hairStyle: Math.floor(num(lk.hairStyle, 0, 0, 2)),
+        top: Math.floor(num(lk.top, 0, 0, D.PALETTE.top.length - 1)),
+        pants: Math.floor(num(lk.pants, 0, 0, D.PALETTE.pants.length - 1)),
+      },
+      speed: num(g && g.speed, 1.15, 0.5, 2),
+      skill: num(g && g.skill, 1.1, 0.5, 2),
+    };
   }
 
   /** 分店（只有店面自己的欄位）；壞資料回傳 null。 */
@@ -374,7 +414,7 @@
     s.reputation = num(raw.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
     s.lowDays = Math.floor(num(raw.lowDays, 0, 0, 1e4));
     const ov = raw.over;
-    s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
+    s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: ov.reason === 'chain' ? 'chain' : 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
     // 舊存檔沒有洗碗槽：自動補一個（優先放在靠牆的一排；沒有空位就放進倉庫）
     if (!s.items.some((i) => i.id === 'sink') && !(s.inventory.sink > 0)) {
       let spot = null;
@@ -386,16 +426,13 @@
     }
     s.dishes = { danbing: { cooked: 0 } };
     for (const [id, v] of Object.entries(raw.dishes || {})) if (D.dishes[id]) s.dishes[id] = { cooked: Math.floor(num(v && v.cooked, 0, 0, 1e9)) };
-    // 店掌櫃（玩家本人）如果搬去分店了，主店沒有掌櫃，名單可以是空的
     const hq = raw.hq && typeof raw.hq === 'object' ? raw.hq : null;
-    const playerAway = !!(hq && Number.isInteger(hq.activeId) && hq.activeId > 0 && Array.isArray(raw.branches) && raw.branches.some((b) => b && b.id === hq.activeId));
-    if (playerAway && Array.isArray(raw.staff)) s.staff = [];
     const { staff, maxId } = cleanStaff(raw.staff);
     if (staff.length) {
-      fixStaffRoles(staff, !playerAway);
+      fixStaffRoles(staff, hq && hq.gm ? null : true); // 有總經理資料時，掌櫃由後面的整理決定
       s.staff = staff;
       s.nextStaffId = maxId + 1;
-    }
+    } else if (hq && hq.gm && Array.isArray(raw.staff)) s.staff = []; // 名單空了，掌櫃由總經理資料補上
     if (Array.isArray(raw.candidates) && raw.candidates.length) {
       const cs = raw.candidates
         .filter((c) => c && typeof c.name === 'string' && c.look)
@@ -438,17 +475,39 @@
       }
     }
     co.nextStoreId = Math.max(Math.floor(num(hq && hq.nextStoreId, 1, 1, 1e6)), ...co.stores.map((x) => x.id + 1));
-    // 全公司只能有一位店掌櫃（玩家本人），他在哪間店，玩家就在哪間店
-    const holders = co.stores.filter((x) => x.staff.some((m) => m.boss));
-    let at = holders.find((x) => x.id === (hq && hq.activeId)) || holders[0];
-    if (!at) {
-      at = co.stores[0];
-      if (at.staff.length) at.staff[0].boss = true;
+    // 玩家的身分：只有一間店時是店掌櫃（員工名單裡的 boss）；有分店之後是總經理（不在任何一間店的名單裡）
+    co.chainDays = Math.floor(num(hq && hq.chainDays, 0, 0, 1e4));
+    const gmRaw = hq && hq.gm && typeof hq.gm === 'object' ? hq.gm : null;
+    const bosses = [];
+    for (const x of co.stores) for (const m of x.staff) if (m.boss) bosses.push([x, m]);
+    if (co.stores.length >= 2) {
+      let gm = gmRaw ? cleanGm(gmRaw) : null;
+      if (!gm && bosses.length) gm = cleanGm(bosses[0][1]);
+      for (const [x, m] of bosses) x.staff = x.staff.filter((r) => r !== m);
+      co.gm = gm || cleanGm({ id: 1, name: '阿福', look: { skin: 1, hair: 0, hairStyle: 0, top: 7, pants: 0 }, speed: 1.15, skill: 1.1 });
+    } else {
+      const main = co.stores[0];
+      let keep = bosses.length ? bosses[0][1] : null;
+      for (const [, m] of bosses) if (m !== keep) m.boss = false;
+      if (!keep) {
+        const gm = gmRaw ? cleanGm(gmRaw) : null;
+        if (gm) {
+          keep = newStaff(gm.id, { ...gm, boss: true, shift: D.DAY.defaultOpen });
+          main.staff.unshift(keep);
+        } else if (main.staff.length) {
+          keep = main.staff[0];
+          keep.boss = true;
+          keep.wage = 0;
+          keep.raise = 0;
+          keep.manager = false;
+          keep.head = false;
+        }
+      }
+      co.gm = null;
     }
-    for (const x of co.stores) if (x !== at) for (const m of x.staff) if (m.boss) m.boss = false;
-    co.activeId = at.id;
+    co.activeId = co.stores.some((x) => x.id === (hq && hq.activeId)) ? hq.activeId : 0;
     // 員工編號全公司不重複
-    const allIds = co.stores.flatMap((x) => x.staff.map((m) => m.id));
+    const allIds = co.stores.flatMap((x) => x.staff.map((m) => m.id)).concat(co.gm ? [co.gm.id] : []);
     s.nextStaffId = Math.max(s.nextStaffId, ...allIds.map((i) => i + 1));
     return co.active;
   }
@@ -458,13 +517,13 @@
     const co = state && state.company;
     const out = { ...(co ? co.stores[0] : state), v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }; // 主店的平面存檔（含共用欄位）
     if (co && co.stores.length > 1) {
-      out.hq = { gameMin: co.gameMin, activeId: co.activeId, nextStoreId: co.nextStoreId };
+      out.hq = { gameMin: co.gameMin, activeId: co.activeId, nextStoreId: co.nextStoreId, gm: co.gm, chainDays: co.chainDays };
       out.branches = co.stores.slice(1).map((st) => {
         const b = {};
         for (const k of STORE_KEYS) b[k] = st[k];
         return b;
       });
-    } else if (co) out.hq = { gameMin: co.gameMin, activeId: 0, nextStoreId: co.nextStoreId };
+    } else if (co) out.hq = { gameMin: co.gameMin, activeId: 0, nextStoreId: co.nextStoreId, gm: co.gm, chainDays: 0 };
     return RC.codec.encode(JSON.stringify(out));
   }
 
@@ -561,5 +620,5 @@
     }
   }
 
-  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, newStore, attach, dailyWage, CORE_KEYS, STORE_KEYS });
+  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, newStore, attach, cleanGm, dailyWage, CORE_KEYS, STORE_KEYS });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

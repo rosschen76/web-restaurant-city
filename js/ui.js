@@ -238,6 +238,8 @@
       const g = this.game;
       let msg = '';
       if (g.isOver()) msg = '餐廳已經倒閉了。到「設定 → 存檔」重新開始。';
+      else if (g.s.company.chainDays > 0) msg = `所有分店的風評都低於 ${D.BRANCH.chainRep}，已連續 ${g.s.company.chainDays} 天，滿 ${D.BRANCH.chainDays} 天公司就倒閉了！`;
+      else if (g.isGM() && !g.s.staff.some((m) => g.canCollect(m))) msg = '這間店沒有人能結帳（要有 Lv.10 的正店長）！到「員工」任命店長。';
       else if (g.dayMode && g.isOpen() && !g.anyOnDuty()) msg = '營業時間裡沒有人在班！到「員工 → 排班」調整班表。';
       else if (!g.sinks.length) msg = '沒有洗碗槽！髒餐具沒地方洗，盤子用完就沒辦法出菜了。到「商店」買一個。';
       else if (g.cleanPlates() < 1 && g.dirty.size + g.s.sinkDirty > 0) msg = '乾淨的盤子用完了，等員工洗好碗才能繼續出菜（多買盤子或多請人洗碗）。';
@@ -336,7 +338,7 @@
         return;
       }
       bar.hidden = false;
-      const html = ss.map((x) => `<button class="store-chip ${x === g.s ? 'on' : ''}" data-act="goto-store" data-id="${x.id}" title="${esc(x.name)}">${x.kind === 'main' ? '主店' : esc(x.name)}${x.staff.some((m) => m.boss) ? ' ★' : ''}</button>`).join('');
+      const html = ss.map((x) => `<button class="store-chip ${x === g.s ? 'on' : ''}" data-act="goto-store" data-id="${x.id}" title="${esc(x.name)}">${x.kind === 'main' ? '主店' : esc(x.name)}</button>`).join('');
       if (bar.dataset.html !== html) {
         bar.dataset.html = html;
         bar.innerHTML = html;
@@ -359,10 +361,11 @@
       this.toast(`現在在「${this.game.s.name}」`, 'good');
     }
 
-    /** 分店面板：各店概況、前往、開分店、調動員工 */
+    /** 分店面板：總經理、各店概況、前往、開分店、調動員工、關閉分店 */
     htmlCompany() {
       const g = this.game;
       const s = g.s;
+      const co = s.company;
       const infos = g.storeInfos();
       const sel = (this.panel && this.panel.sel) || {};
       const brand = g.brandReputation();
@@ -370,10 +373,15 @@
         .map((x) => {
           const rp = x.report;
           const rep = `${x.reputation > 0 ? '+' : ''}${x.reputation.toFixed(1)}`;
+          const warn = [];
+          if (!x.hasBoss && !x.head) warn.push(`沒有正店長（要 Lv.${D.DAY.managerLevel} 以上的員工）`);
+          if (!x.hasBoss && !x.deputy) warn.push(`沒有副店長（Lv.${D.DAY.deputyLevel} 以上）`);
+          if (!x.canCollect) warn.push('沒有人能結帳，客人只能自助結帳');
           return `<div class="row ${x.active ? 'cur' : ''}"><div class="grow">
-            <div class="nm">${esc(x.name)} <span class="tag ${x.kind === 'main' ? 'gold' : 'blue'}">${x.kind === 'main' ? '主店' : '分店'}</span>${x.hasPlayer ? ' <span class="tag good">你在這裡</span>' : ''}</div>
+            <div class="nm">${esc(x.name)} <span class="tag ${x.kind === 'main' ? 'gold' : 'blue'}">${x.kind === 'main' ? '主店' : '分店'}</span>${x.active ? ' <span class="tag good">檢視中</span>' : ''}</div>
             <div class="sub">${'★'.repeat(x.stars)}${'☆'.repeat(D.MAX_STARS - x.stars)}　風評 ${rep}　${x.room.w}×${x.room.h}　員工 ${x.staff} 位</div>
-            <div class="sub">值班店長：${x.managers.length ? esc(x.managers.join('、')) : '<span class="bad">沒有（需要 Lv.' + D.DAY.managerLevel + ' 以上員工）</span>'}</div>
+            <div class="sub">正店長：${x.head ? esc(x.head) : '—'}　副店長：${x.deputy ? esc(x.deputy) + (x.deputyCanCollect ? '' : `（Lv.${D.DAY.managerLevel} 才能結帳）`) : '—'}</div>
+            ${warn.map((w) => `<div class="sub bad">⚠ ${esc(w)}</div>`).join('')}
             ${x.active ? '' : `<div class="sub">${rp ? `最近結算（第 ${rp.day} 天）：服務 ${fmt(rp.served)} 位，營收 ${ic('coin', 1)}${fmt(rp.earned)}，日薪 ${fmt(rp.wages)}` : '還沒有結算紀錄'}　切換或每天午夜會補算</div>`}
             </div>
             <div>${x.active ? '' : `<button class="btn small primary" data-act="goto-store" data-id="${x.id}">前往</button>`}
@@ -383,29 +391,70 @@
       // 開分店
       const chk = g.branchCheck();
       const list = chk.checks.map((c) => `<div class="sub ${c.ok ? 'good' : 'bad'}">${c.ok ? '✔' : '✘'} ${esc(c.text)}</div>`).join('');
-      const opts = chk.eligible.map((m) => `<option value="${m.id}" ${+sel.staff === m.id ? 'selected' : ''}>${esc(m.name)}　Lv.${m.level}　能力 ${g.abilityOf(m).toFixed(2)}</option>`).join('');
+      const ab = (m) => `${esc(m.name)}　Lv.${m.level}　能力 ${g.abilityOf(m).toFixed(2)}`;
+      const headOpts = chk.heads.map((m) => `<option value="${m.id}" ${+sel.head === m.id ? 'selected' : ''}>${ab(m)}</option>`).join('');
+      const depOpts = chk.deputies.map((m) => `<option value="${m.id}" ${+sel.deputy === m.id ? 'selected' : ''}>${ab(m)}${m.level >= D.DAY.managerLevel ? '' : '（不能結帳）'}</option>`).join('');
       const nextNo = infos.length;
       const nameVal = sel.name != null ? sel.name : `分店 ${nextNo}`;
       const open = `<div class="section-title">開分店（第 ${nextNo} 間，開店資金 ${ic('coin', 1)}${fmt(chk.cost)}）</div>${list}
-        <div class="sched-row">店長 <select data-co="staff" aria-label="分店店長">${opts || '<option value="">（沒有人選）</option>'}</select></div>
+        <div class="sub" style="margin:4px 0">每間店都實行<b>雙店長制</b>：正店長（Lv.${D.DAY.managerLevel} 以上，有結帳權限）＋副店長（Lv.${D.DAY.deputyLevel} 以上；Lv.${D.DAY.managerLevel} 以上才有結帳權限）。${co.gm ? '' : '開了第一間分店，你就成為<b>總經理</b>，不再屬於任何一間店。'}</div>
+        <div class="sched-row">正店長 <select data-co="head" aria-label="分店正店長">${headOpts || '<option value="">（沒有人選）</option>'}</select></div>
+        <div class="sched-row">副店長 <select data-co="deputy" aria-label="分店副店長">${depOpts || '<option value="">（沒有人選）</option>'}</select></div>
         <div class="sched-row">店名 <input type="text" maxlength="${D.BRANCH.nameMax}" value="${esc(nameVal)}" data-co="name" aria-label="分店名稱"><button class="btn small primary" data-act="open-branch" ${chk.ok ? '' : 'disabled'}>開設分店</button></div>`;
       // 調動員工
       const others = infos.filter((x) => !x.active);
       const mine = s.staff.filter((m) => !m.boss);
       let xfer = '';
       if (others.length && mine.length) {
-        const so = mine.map((m) => `<option value="${m.id}" ${+sel.xstaff === m.id ? 'selected' : ''}>${esc(m.name)}　Lv.${m.level}${m.manager ? '（店長）' : ''}</option>`).join('');
+        const so = mine.map((m) => `<option value="${m.id}" ${+sel.xstaff === m.id ? 'selected' : ''}>${esc(m.name)}　Lv.${m.level}${m.head ? '（正店長）' : m.manager ? '（副店長）' : ''}</option>`).join('');
         const to = others.map((x) => `<option value="${x.id}" ${+sel.xto === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
         xfer = `<div class="section-title">調動員工（從「${esc(s.name)}」）</div>
           <div class="sched-row"><select data-co="xstaff" aria-label="要調動的員工">${so}</select> 調到 <select data-co="xto" aria-label="調去的店">${to}</select><button class="btn small" data-act="xfer-staff">調動</button></div>
-          <div class="sub">調走店長後，這間店會自動改由 Lv.${D.DAY.managerLevel} 以上、綜合能力最強的員工接任。</div>`;
-        if (sel.xstaff == null) sel.xstaff = mine[0].id;
-        if (sel.xto == null) sel.xto = others[0].id;
-        if (this.panel) this.panel.sel = { ...sel };
+          <div class="sub">調動後職位會清掉；兩間店的店長缺額會自動由 Lv.${D.DAY.managerLevel}（正）／Lv.${D.DAY.deputyLevel}（副）以上、綜合能力最強的員工補上。</div>`;
       }
-      return `<div class="sub" style="margin:0 3px 6px">公司共有 <b>${infos.length}</b> 間店，品牌聲譽 <b>${brand > 0 ? '+' : ''}${brand.toFixed(1)}</b>（各店風評的平均，會影響每間店的客流）。金幣、等級、菜單、倉庫與任務是整個公司共用；每間店的格局、員工、風評、魅力各自獨立。</div>
-        <div class="sub" style="margin:0 3px 6px">你同一時間只待在一間店，其他店由值班店長主持：切換店面與每天午夜才補算（客流約 ${Math.round(D.BRANCH.awayFlow * 100)}%）。</div>
-        ${cards}${xfer}${open}`;
+      const gmLine = co.gm
+        ? `<div class="row"><div class="ico"><img class="px" src="${avatar(co.gm.look, true, true)}" width="30" height="54" alt=""></div><div class="grow"><div class="nm">${esc(co.gm.name)} <span class="tag gold">總經理・你</span></div><div class="sub">不屬於任何一間店，每間店由正、副店長主持；你可以隨時檢視任何一間店、調整格局、雇人與排班。</div></div><div><button class="btn small" data-act="gm-rename">改名</button></div></div>`
+        : `<div class="sub" style="margin:0 3px 6px">你現在是主店的店掌櫃。開了分店之後，你會成為<b>總經理</b>。</div>`;
+      const chain = co.chainDays > 0 ? `<div class="warn-line">⚠ 所有分店的風評都低於 ${D.BRANCH.chainRep}，已連續 ${co.chainDays} 天；滿 ${D.BRANCH.chainDays} 天公司就倒閉（遊戲終止）。</div>` : '';
+      return `${gmLine}
+        <div class="sub" style="margin:0 3px 6px">公司共有 <b>${infos.length}</b> 間店，品牌聲譽 <b>${brand > 0 ? '+' : ''}${brand.toFixed(1)}</b>（各店風評的平均，會影響每間店的客流）。金幣、等級、菜單、倉庫與任務是整個公司共用；每間店的格局、員工、風評、魅力各自獨立。沒有被你檢視的店，在切換店面與每天午夜才補算（客流約 ${Math.round(D.BRANCH.awayFlow * 100)}%）。</div>
+        <div class="sub" style="margin:0 3px 6px">風評規則：單一分店風評連續 ${D.REPUTATION.loseDays} 天跌到谷底（${D.REPUTATION.min}），那間分店關門；<b>所有分店</b>（至少 ${D.BRANCH.chainMinBranches} 間）的風評都低於 ${D.BRANCH.chainRep} 連續 ${D.BRANCH.chainDays} 天，視同主店倒閉，遊戲終止。</div>
+        ${chain}${cards}${xfer}${open}`;
+    }
+
+    /** 關閉分店的對話框：家具入倉庫與賣出、每位員工調去哪裡或資遣（加發資遣費） */
+    showCloseBranch(id) {
+      const g = this.game;
+      const plan = g.planClose(id);
+      if (!plan) return;
+      this._closeId = id;
+      const targetName = (sid) => (plan.others.find((x) => x.id === sid) || {}).name || '';
+      const rows = plan.staff
+        .map((p) => {
+          const opts = p.targets.map((sid, i) => `<option value="${sid}" ${i === 0 ? 'selected' : ''}>調到「${esc(targetName(sid))}」</option>`).join('');
+          return `<div class="sched-row"><span style="min-width:9em">${esc(p.name)}　Lv.${p.level}${p.post ? '（' + p.post + '）' : ''}</span>
+            <select data-close-staff="${p.id}" data-sev="${p.severance}" aria-label="${esc(p.name)}的去向">${opts}<option value="fire" ${p.targets.length ? '' : 'selected'}>資遣（資遣費 ${fmt(p.severance)}）</option></select></div>`;
+        })
+        .join('');
+      const it = plan.items;
+      this.modal(`<div class="section-title" style="margin-top:0">關閉分店「${esc(plan.name)}」</div>
+        <div class="sub" style="line-height:1.6">家具共 <b>${it.total}</b> 件：<b>${it.keep}</b> 件放進倉庫（倉庫容量 ${plan.warehouse.cap} 件，目前已有 ${plan.warehouse.stored} 件）${it.sell ? `；放不下的 <b>${it.sell}</b> 件按半價賣掉，得 ${ic('coin', 1)}${fmt(it.sellCoins)}` : ''}。</div>
+        <div class="section-title">員工</div>
+        ${rows || '<div class="sub">這間店沒有員工。</div>'}
+        <div class="sub" style="margin-top:6px">資遣要加發<b>資遣費</b>（日薪的 ${D.BRANCH.severanceDays} 倍）。資遣費合計：${ic('coin', 1)}<b id="sev-total">0</b>（目前有 ${fmt(g.s.coins)}）</div>
+        <div style="text-align:center;margin-top:8px"><button class="btn danger" data-act="close-branch-ok">確定關閉</button><button class="btn" data-act="close-branch-cancel">取消</button></div>`);
+      this.panel.name = 'closebranch';
+      this.updateSeverance();
+    }
+
+    /** 關店對話框：即時加總資遣費 */
+    updateSeverance() {
+      const o = this.panel && this.panel.overlay;
+      if (!o) return;
+      let sum = 0;
+      for (const el of o.querySelectorAll('[data-close-staff]')) if (el.value === 'fire') sum += +el.dataset.sev;
+      const t = o.querySelector('#sev-total');
+      if (t) t.textContent = fmt(sum);
     }
 
     /** 遊戲時鐘與風評 */
@@ -632,6 +681,8 @@
       const cap = D.maxStaffForLevel(s.level);
       const hired = s.staff.filter((m) => !m.boss).length;
       const totalWage = s.staff.reduce((n, m) => n + g.wageOf(m), 0);
+      const hasHead = s.staff.some((x) => x.head);
+      const hasDeputy = s.staff.some((x) => x.manager && !x.head);
       const row = (m) => {
         if (m.boss) {
           return `<div class="row cur"><div class="ico"><img class="px" src="${avatar(m.look, true, true)}" width="30" height="54" alt=""></div>
@@ -642,20 +693,21 @@
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}${m.level >= D.STAFF_XP_STEPS.length ? '・滿級' : ''}</span>${m.manager ? ' <span class="tag blue">值班店長</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
+            <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}${m.level >= D.STAFF_XP_STEPS.length ? '・滿級' : ''}</span>${m.head ? ' <span class="tag blue">正店長</span>' : m.manager ? ' <span class="tag blue">副店長</span>' : ''}${m.manager && !g.canCollect(m) ? ' <span class="tag">不能結帳</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${g.speedOf(m).toFixed(2)}　技術 ${g.skillOf(m).toFixed(2)}${m.raise ? `（加薪加成 +${(m.raise * D.RAISE.abilityPerPct).toFixed(1)}%）` : ''}　班別 ${shiftText(m.shift)}</div>
             <div class="sub">日薪 ${ic('coin', 1)}${fmt(g.wageOf(m))}${m.raise ? `（基本 ${fmt(m.wage)} ＋${m.raise}%）` : ''}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
             <div class="sub raise-row">加薪 <input type="range" min="0" max="${D.RAISE.max}" step="1" value="${m.raise || 0}" data-raise="${m.id}" aria-label="${esc(m.name)}的加薪百分比"><b data-raise-label>${m.raise || 0}%</b></div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
             <div><button class="btn small" data-act="feed" data-id="${m.id}" data-feed="${m.id}">${ic('bolt', 1)}餵食 ${D.FEED_COST}</button>
-            ${m.manager ? `<button class="btn small" data-act="clear-manager" data-id="${m.id}">解除店長</button>` : m.level >= D.DAY.managerLevel ? `<button class="btn small blue" data-act="set-manager" data-id="${m.id}">任命值班店長</button>` : ''}
+            ${m.manager ? `<button class="btn small" data-act="clear-manager" data-id="${m.id}">解除${m.head ? '正' : '副'}店長</button>` : `${m.level >= D.DAY.managerLevel && !hasHead ? `<button class="btn small blue" data-act="set-manager" data-post="head" data-id="${m.id}">任命正店長</button>` : ''}${m.level >= D.DAY.deputyLevel && !hasDeputy ? `<button class="btn small blue" data-act="set-manager" data-post="deputy" data-id="${m.id}">任命副店長</button>` : ''}`}
             <button class="btn small danger" data-act="fire" data-id="${m.id}">解雇</button></div></div>`;
       };
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
-      return `<div class="section-title" style="margin-top:0">店掌櫃 + 員工 ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
+      const gmNote = g.isGM() ? `<div class="sub" style="margin:0 3px 6px">你是<b>總經理</b>，不屬於任何一間店。這間店（「${esc(s.name)}」）由正、副店長主持。</div>` : '';
+      return `${gmNote}<div class="section-title" style="margin-top:0">${g.isGM() ? '員工' : '店掌櫃 + 員工'} ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="sub" style="margin:6px 3px">每天午夜發日薪，合計 ${ic('coin', 1)}<b>${fmt(totalWage)}</b>；金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到就會辭職。</div>
         <div class="sub" style="margin:6px 3px">員工等級最高 Lv.${D.STAFF_XP_STEPS.length}。可以替每位員工<b>加薪 0～${D.RAISE.max}%</b>：日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +${D.RAISE.abilityPerPct}% 能力，最多 +${D.RAISE.max * D.RAISE.abilityPerPct}%）；調回 0% 能力就恢復。</div>
-        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；Lv.${D.DAY.managerLevel} 以上可任命為值班店長，能代替掌櫃收款）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
+        <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；每間店實行雙店長制：<b>正店長</b>（Lv.${D.DAY.managerLevel} 以上）與<b>副店長</b>（Lv.${D.DAY.deputyLevel} 以上），正店長、Lv.${D.DAY.managerLevel} 以上的副店長才有結帳權限）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
         <div class="sub" style="margin:6px 3px">想找新人，到「招聘」分頁。</div>`;
     }
 
@@ -728,7 +780,7 @@
         .map((m) => {
           const cells = Array.from({ length: 24 }, (_, h) => `<i class="${(((h - m.shift) % 24) + 24) % 24 < D.DAY.shiftHours ? 'ok' : ''} ${cov.open[h] ? 'open' : ''}"></i>`);
           return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true, m.boss)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} ${m.boss ? '<span class="tag gold">店掌櫃</span>' : m.manager ? '<span class="tag blue">值班店長</span>' : `<span class="tag gold">Lv.${m.level}</span>`}</div>
+            <div class="grow"><div class="nm">${esc(m.name)} ${m.boss ? '<span class="tag gold">店掌櫃</span>' : m.head ? '<span class="tag blue">正店長</span>' : m.manager ? '<span class="tag blue">副店長</span>' : `<span class="tag gold">Lv.${m.level}</span>`}</div>
             <div class="sub">上班 <select data-sel="shift" data-id="${m.id}" aria-label="${esc(m.name)}的上班時間">${opt(0, 23, m.shift)}</select> 起連續 ${D.DAY.shiftHours} 小時（到 ${hhmm(m.shift + D.DAY.shiftHours)}）</div>
             ${bar(cells)}</div></div>`;
         })
@@ -800,11 +852,10 @@
           <button class="btn small blue" data-act="import-save">匯入並重新載入</button>
           <div class="section-title">危險區</div><button class="btn small danger" data-act="reset">重新開始（清除存檔）</button>`;
       }
-      const boss = s.staff.find((m) => m.boss);
       return `<div class="section-title" style="margin-top:0">餐廳名稱</div>
         <div style="display:flex;gap:6px;align-items:center"><input type="text" id="rn" maxlength="12" value="${esc(s.name)}"><button class="btn small primary" data-act="rename">儲存</button></div>
-        <div class="section-title">店掌櫃的名字（就是你）</div>
-        <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bn" maxlength="8" value="${esc(boss ? boss.name : '')}"><button class="btn small primary" data-act="rename-boss">儲存</button></div>
+        <div class="section-title">${g.isGM() ? '總經理' : '店掌櫃'}的名字（就是你）</div>
+        <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bn" maxlength="8" value="${esc(g.playerName())}"><button class="btn small primary" data-act="rename-boss">儲存</button></div>
         <div class="section-title">聲音</div>
         <div class="vol-row"><button class="btn small ${A.sfxOn ? 'primary' : ''}" data-act="toggle-sfx">音效：${A.sfxOn ? '開' : '關'}</button>
           <input type="range" min="0" max="100" value="${Math.round(A.sfxVol * 100)}" data-vol="sfx" aria-label="音效音量"><span class="vol-label" data-vol-label>${Math.round(A.sfxVol * 100)}%</span></div>
@@ -830,7 +881,7 @@
     }
 
     showWelcome() {
-      const boss = this.game.s.staff.find((m) => m.boss);
+      const bossName = this.game.playerName();
       this.modal(`<div class="welcome"><h3 style="margin:0 0 6px;font-size:20px">歡迎來到像素餐廳城！</h3>
         <p>你的小吃店今天開張了。你就是店裡的<b>店掌櫃</b>，把它經營成傳說中的名店吧！</p>
         <ul><li>客人有單人也有成群來，<b>不同組不併桌</b>；沒空桌就在門外候位</li>
@@ -841,7 +892,7 @@
         <li>到「商店」買桌椅、爐灶與裝飾，椅子要<b>緊鄰桌子</b></li>
         <li>到「菜單」學新菜色，「員工 → 招聘」找幫手（雇用不用先付錢，每天午夜發<b>日薪</b>）；進度會自動存檔，離開期間也會替你賺錢</li></ul>
         <div class="section-title" style="margin-top:6px">幫你的店掌櫃取個名字</div>
-        <input type="text" id="bn0" maxlength="8" value="${esc(boss ? boss.name : '')}">
+        <input type="text" id="bn0" maxlength="8" value="${esc(bossName)}">
         <div style="text-align:center;margin-top:6px"><button class="btn primary" data-act="welcome-ok">開始營業！</button></div></div>`);
     }
 
@@ -860,8 +911,8 @@
     showGameOver() {
       const o = this.game.stores()[0].over;
       if (!o) return;
-      const why = o.reason === 'reputation' ? `餐廳的風評連續 ${D.REPUTATION.loseDays} 天跌到谷底（${D.REPUTATION.min}），客人再也不願意上門了。` : '餐廳無法再經營下去了。';
-      this.modal(`<div class="lvup"><h2 style="font-size:22px">餐廳倒閉了…</h2>
+      const why = o.reason === 'chain' ? `所有分店的風評都低於 ${D.BRANCH.chainRep}，連續 ${D.BRANCH.chainDays} 天，整個連鎖體系垮了，視同主店倒閉。` : o.reason === 'reputation' ? `餐廳的風評連續 ${D.REPUTATION.loseDays} 天跌到谷底（${D.REPUTATION.min}），客人再也不願意上門了。` : '餐廳無法再經營下去了。';
+      this.modal(`<div class="lvup"><h2 style="font-size:22px">${o.reason === 'chain' ? '公司倒閉了…' : '餐廳倒閉了…'}</h2>
         <div>${why}</div>
         <div class="list"><div>✦ 撐了 <b>${o.day}</b> 天</div><div>✦ 服務過 <b>${fmt(o.served)}</b> 位客人</div><div>✦ 累計賺了 ${ic('coin', 1)} <b>${fmt(o.earned)}</b></div><div>✦ 餐廳等級 <b>Lv.${o.level}</b></div></div>
         <div class="sub">下次記得多請人手、排好班表、顧好餐點與環境，讓客人滿意。</div>
@@ -869,11 +920,10 @@
       this.panel.name = 'gameover';
     }
 
-    showBossRename(reopenStaff) {
-      const boss = this.game.s.staff.find((m) => m.boss);
-      this._reopenStaff = !!reopenStaff;
-      this.modal(`<div class="section-title" style="margin-top:0">店掌櫃的名字</div>
-        <input type="text" id="bn2" maxlength="8" value="${esc(boss ? boss.name : '')}">
+    showBossRename(reopen) {
+      this._reopen = reopen || null; // 儲存或取消後要回到哪個面板：'staff' | 'company'
+      this.modal(`<div class="section-title" style="margin-top:0">${this.game.isGM() ? '總經理' : '店掌櫃'}的名字</div>
+        <input type="text" id="bn2" maxlength="8" value="${esc(this.game.playerName())}">
         <div style="text-align:center;margin-top:8px"><button class="btn primary" data-act="boss-save">儲存</button><button class="btn" data-act="boss-cancel">取消</button></div>`);
       setTimeout(() => {
         const i = document.getElementById('bn2');
@@ -962,7 +1012,7 @@
         }
         case 'open-branch': {
           const q = (k) => (this.panel && this.panel.overlay ? this.panel.overlay.querySelector(`[data-co=${k}]`) : null);
-          const r = res(g.openBranch(+(q('staff') || {}).value, (q('name') || {}).value), 'buy');
+          const r = res(g.openBranch(+(q('head') || {}).value, +(q('deputy') || {}).value, (q('name') || {}).value), 'buy');
           if (r.ok) {
             this.panel.sel = {};
             this.panel.lastHtml = null;
@@ -980,12 +1030,13 @@
           }
           break;
         }
-        case 'close-branch': {
-          const st = g.stores().find((x) => x.id === +id);
-          if (st) this.confirm(`確定要關閉分店「${st.name}」嗎？員工會回到主店、家具收進倉庫。`, () => {
-            res(g.closeBranch(+id, 'manual'), 'click');
-            this.openPanel('company');
-          });
+        case 'close-branch': this.showCloseBranch(+id); A.sfx('click'); break;
+        case 'close-branch-cancel': this.openPanel('company'); break;
+        case 'close-branch-ok': {
+          const moves = {};
+          for (const el of this.panel.overlay.querySelectorAll('[data-close-staff]')) moves[+el.dataset.closeStaff] = el.value === 'fire' ? 'fire' : +el.value;
+          const r = res(g.closeBranch(this._closeId, { moves }, 'manual'), 'click');
+          if (r.ok) this.openPanel('company');
           break;
         }
         case 'open-quest': this.openPanel('quest'); A.sfx('click'); break;
@@ -1031,21 +1082,22 @@
           break;
         }
         case 'auto-sched': res(g.setAutoSchedule(!g.s.schedule.auto), 'click'); break;
-        case 'set-manager': res(g.assignManager(+id), 'buy'); break;
+        case 'set-manager': res(g.assignManager(+id, el.dataset.post), 'buy'); break;
         case 'clear-manager': res(g.clearManager(id != null ? +id : undefined), 'click'); break;
-        case 'boss-rename': this.showBossRename(true); A.sfx('click'); break;
+        case 'boss-rename': this.showBossRename('staff'); A.sfx('click'); break;
+        case 'gm-rename': this.showBossRename('company'); A.sfx('click'); break;
         case 'boss-save': {
           const v = document.getElementById('bn2');
           const r = v ? res(g.renameBoss(v.value), 'buy') : { ok: false };
           if (r.ok) {
             this.closePanel(true);
-            if (this._reopenStaff) this.openPanel('staff');
+            if (this._reopen) this.openPanel(this._reopen);
           }
           break;
         }
         case 'boss-cancel':
           this.closePanel(true);
-          if (this._reopenStaff) this.openPanel('staff');
+          if (this._reopen) this.openPanel(this._reopen);
           break;
         case 'rename': {
           const v = document.getElementById('rn');
@@ -1417,6 +1469,10 @@
         this.persistAudio();
       });
       document.body.addEventListener('change', (e) => {
+        if (e.target.closest && e.target.closest('[data-close-staff]')) {
+          this.updateSeverance();
+          return;
+        }
         const co = e.target.closest && e.target.closest('[data-co]');
         if (co && this.panel && this.panel.name === 'company') {
           this.panel.sel = { ...(this.panel.sel || {}), [co.dataset.co]: co.value };
