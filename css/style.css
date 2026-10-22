@@ -250,3 +250,12 @@ select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: va
   .clockline { font-size: 11px; }
   /* 提示條放到底部列上方，不要蓋住左上角的資訊卡 */
   .warn-banner { top: auto; bottom: calc(92px + var(--safe-b)); } }
+
+/* 菜單面板：類別篩選、進貨列 */
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 3px 2px; }
+.chip { font: inherit; font-size: 12px; padding: 3px 8px; background: var(--paper-2); color: var(--ink); border: 0; cursor: pointer; box-shadow: 0 -2px 0 var(--ink), 0 2px 0 var(--ink), -2px 0 0 var(--ink), 2px 0 0 var(--ink); }
+.chip.on { background: var(--brand); color: #fff; }
+.chip small { opacity: 0.75; }
+.tag.warn { background: var(--bad); }
+.order-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.order-row .ord { min-width: 3em; text-align: center; }
