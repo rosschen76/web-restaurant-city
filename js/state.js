@@ -361,6 +361,7 @@
     };
     dst.order = clean(raw.order, D.STOCK.orderMax);
     dst.stock = clean(raw.stock, 1e6);
+    for (const id of Object.keys(dst.stock)) if (!dst.menu.includes(id)) delete dst.stock[id]; // 沒上架的菜不留庫存（下架就報廢）
     dst.stockDay = Math.floor(num(raw.stockDay, 0, 0, 1e6));
     const mk = {};
     for (const [id, n] of Object.entries(raw.markup && typeof raw.markup === 'object' ? raw.markup : {})) if (learned[id] && D.dishes[id]) {

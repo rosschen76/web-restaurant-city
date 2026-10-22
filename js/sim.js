@@ -1135,13 +1135,25 @@
       return this.done();
     }
 
-    /** 下架（庫存留著，再上架還能賣）；至少要留一道 */
+    /** 下架這道菜會報廢多少庫存：{ units, loss（食材成本） } */
+    scrapPreview(id) {
+      const units = this.s.stock[id] || 0;
+      return { units, loss: units * (D.dishes[id] ? D.dishes[id].cost : 0) };
+    }
+
+    /** 下架：剩下的庫存直接報廢（不會占倉庫、也不會留著等再上架）；至少要留一道。回傳報廢的份數與損失 */
     removeMenu(id) {
       const s = this.s;
       if (!s.menu.includes(id)) return this.fail('這道菜沒有上架');
       if (s.menu.length <= 1) return this.fail('菜單至少要有一道菜');
+      const sc = this.scrapPreview(id);
       s.menu = s.menu.filter((x) => x !== id);
-      return this.done();
+      delete s.stock[id];
+      const r = this.done();
+      r.scrapped = sc.units;
+      r.loss = sc.loss;
+      if (sc.units > 0 && !this.quiet) this.toast(`「${D.dishes[id].name}」下架，報廢 ${sc.units} 份庫存（損失食材成本 ${sc.loss} 金幣）`, 'bad');
+      return r;
     }
 
     /* ───────── 成就 ───────── */

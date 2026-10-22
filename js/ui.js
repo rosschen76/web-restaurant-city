@@ -757,7 +757,7 @@
         })
         .join('');
       return `<div class="section-title" style="margin-top:0">「${esc(s.name)}」的菜單 ${s.menu.length} / ${D.STOCK.menuMax}${full ? '（已滿，先下架才能換新菜）' : ''}</div>
-        <div class="sub" style="margin:2px 3px">客人只會點上架、有庫存、而且爐灶煮得動的菜。每間店的菜單各自設定。</div>${mkLine}${onRows}${this.htmlPairs()}
+        <div class="sub" style="margin:2px 3px">客人只會點上架、有庫存、而且爐灶煮得動的菜。每間店的菜單各自設定。<b>下架的菜，剩下的庫存會直接報廢</b>（下架前會警告）。</div>${mkLine}${onRows}${this.htmlPairs()}
         <div class="section-title">可以上架的菜</div>${this.catChips(cat)}${learned || '<div class="empty">沒有其他學會的菜可以上架。到「學習」分頁學新菜吧。</div>'}`;
     }
 
@@ -1238,7 +1238,22 @@
         case 'learn': res(g.learnDish(id), 'buy'); break;
         case 'menu-cat': this.panel.cat = el.dataset.cat; A.sfx('click'); this.renderPanel(); break;
         case 'menu-add': res(g.addMenu(id), 'buy'); break;
-        case 'menu-remove': res(g.removeMenu(id), 'click'); break;
+        case 'menu-remove': {
+          const sc = g.scrapPreview(id);
+          if (sc.units <= 0) {
+            res(g.removeMenu(id), 'click');
+            break;
+          }
+          // 還有庫存：下架會直接報廢，先警告
+          A.sfx('error');
+          this._yes = () => res(g.removeMenu(id), 'click');
+          this.modal(`<div class="section-title" style="margin-top:0;color:var(--bad-d)">⚠ 下架「${esc(D.dishes[id].name)}」？</div>
+            <div style="line-height:1.7;margin:6px 3px 12px">這道菜還有 <b>${sc.units}</b> 份庫存，下架後會<b class="bad">直接報廢</b>，損失食材成本 ${ic('coin', 1)}<b>${fmt(sc.loss)}</b>，無法復原。<br><span class="dimtxt">想保留的話，可以先調低每日進貨量（或關掉自動補貨），等它賣完再下架。</span></div>
+            <div style="text-align:center"><button class="btn danger" data-act="menu-remove-yes">確定下架並報廢</button><button class="btn" data-act="menu-remove-no">取消</button></div>`);
+          break;
+        }
+        case 'menu-remove-yes': { const f = this._yes; this._yes = null; this.closePanel(true); f && f(); this.openPanel('menu', 'shelf'); break; }
+        case 'menu-remove-no': this._yes = null; this.closePanel(true); this.openPanel('menu', 'shelf'); break;
         case 'markup-step': res(g.setMarkup(id, g.markupOf(id) + +el.dataset.d), 'click'); break;
         case 'order-step': res(g.setOrder(id, Math.max(0, (g.s.order[id] || 0) + +el.dataset.d)), 'click'); break;
         case 'auto-stock': res(g.setAutoStock(!g.s.autoStock), 'click'); break;

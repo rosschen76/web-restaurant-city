@@ -536,3 +536,57 @@ test('自動補貨：分配結果的加總不會超過倉庫空位，也不會�
     assert.ok(g.stockTotal() <= Math.max(g.storageCap, before), '不會把倉庫越塞越滿');
   }
 });
+
+/* ───────── 下架報廢 ───────── */
+
+test('下架：剩下的庫存直接報廢（不占倉庫），回傳報廢份數與損失；沒庫存就沒有損失', () => {
+  const g = mk(31, withMenu(['danbing', 'soymilk'], (s) => {
+    s.stock = { danbing: 12, soymilk: 5 };
+  }));
+  assert.deepEqual(g.scrapPreview('danbing'), { units: 12, loss: 12 * D.dishes.danbing.cost });
+  const msgs = [];
+  g.on('toast', (e) => msgs.push(e.msg));
+  const r = g.removeMenu('danbing');
+  assert.equal(r.ok, true);
+  assert.equal(r.scrapped, 12);
+  assert.equal(r.loss, 12 * D.dishes.danbing.cost);
+  assert.equal(g.s.stock.danbing, undefined, '庫存清掉了');
+  assert.equal(g.stockTotal(), 5, '倉庫空出來');
+  assert.ok(msgs.some((m) => /報廢 12 份/.test(m)), msgs.join('|'));
+  // 再上架從 0 開始
+  g.addMenu('danbing');
+  assert.equal(g.s.stock.danbing || 0, 0);
+  // 沒有庫存：不報廢、不通知
+  g.s.stock.soymilk = 0;
+  msgs.length = 0;
+  const r2 = g.removeMenu('soymilk');
+  assert.equal(r2.scrapped, 0);
+  assert.equal(r2.loss, 0);
+  assert.ok(!msgs.some((m) => /報廢/.test(m)));
+  // 失敗的下架不會動庫存
+  const solo = mk(32, withMenu(['danbing'], (s) => (s.stock = { danbing: 9 })));
+  assert.equal(solo.removeMenu('danbing').ok, false);
+  assert.equal(solo.s.stock.danbing, 9);
+  assert.equal(solo.removeMenu('nope').ok, false);
+});
+
+test('下架後自動補貨不會再為它補貨，倉庫容量留給還在賣的菜', () => {
+  const g = mk(33, withMenu(['danbing', 'fantuan']));
+  g.setAutoStock(true);
+  g.deliver();
+  assert.equal(g.stockTotal(), g.storageCap);
+  g.removeMenu('fantuan');
+  g.s.stock.danbing -= 10;
+  g.deliver();
+  assert.equal(g.s.stock.danbing, g.storageCap, '容量全部給蛋餅');
+  assert.equal(g.s.stock.fantuan, undefined);
+});
+
+test('舊存檔裡沒上架的菜留著的庫存，載入時一併報廢', () => {
+  const g = mk(34, withMenu(['danbing', 'soymilk'], (s) => (s.stock = { danbing: 4, soymilk: 7 })));
+  const raw = JSON.parse(JSON.stringify(g.s));
+  raw.menu = ['danbing'];
+  raw.stock = { danbing: 4, soymilk: 7 };
+  const fixed = RC.state.normalize(raw);
+  assert.deepEqual(fixed.stock, { danbing: 4 });
+});
