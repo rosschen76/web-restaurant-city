@@ -691,6 +691,44 @@ await scenario('員工福利：員工面板有福利金與分紅滑桿（0～20%
   assert.deepEqual(saved, [15, 8]);
 });
 
+await scenario('員工分工：員工面板可改職務、自動分配、全部改回通才；掌櫃與店長固定通才；排班頁顯示職務；買出餐台與回收台並實際運轉', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => {
+    const g = window.__game.game;
+    g.s.coins = 1e7; g.s.level = 40;
+    for (let i = 0; i < 6; i++) g.hire(i % 3);
+    for (const id of ['pass_1', 'ret_1']) { g.buyFurniture(id); for (let y = 0; y < 8; y++) { let ok = false; for (let x = 0; x < 8; x++) if (g.placeFromInventory(id, x, y, 0).ok) { ok = true; break; } if (ok) break; } }
+  });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  assert.ok((await page.locator('.win-body').innerText()).includes('職務分工'));
+  const bossRow = (await page.locator('.win-body .row').filter({ hasText: '店掌櫃' }).first().innerText());
+  assert.ok(bossRow.includes('通才'), bossRow);
+  assert.equal(await page.locator('[data-sel=role]').count(), 6, '一般員工各有職務選單，掌櫃沒有');
+  const firstId = await G(page, () => window.__game.game.s.staff[1].id);
+  await page.selectOption(`[data-sel=role][data-id="${firstId}"]`, 'cook');
+  assert.equal(await G(page, () => window.__game.game.s.staff[1].role), 'cook');
+  await page.click('[data-act=auto-roles]');
+  const rc = await G(page, () => window.__game.game.roleCounts());
+  assert.ok(rc.cook >= 1 && rc.waiter >= 1 && rc.dishwasher >= 1 && rc.generalist === 1, JSON.stringify(rc));
+  await page.click('[data-act=all-general]');
+  assert.equal(await G(page, () => window.__game.game.roleCounts().generalist), 7);
+  await page.click('[data-act=auto-roles]');
+  // 排班頁：每位員工標出職務
+  await page.click('[data-tab=sched]');
+  const sched = await page.locator('.win-body').innerText();
+  assert.ok(sched.includes('廚師') && sched.includes('跑堂'), sched);
+  await page.click('.win [data-act=close]');
+  // 讓遊戲跑一陣子：有客人上完菜、經過出餐台與回收台，沒有錯誤
+  await G(page, () => { const g = window.__game.game; g.s.schedule.auto = true; g.autoSchedule(); window.__game.ui.setSpeed(3); });
+  await page.waitForFunction(() => window.__game.game.s.stats.served >= 3, null, { timeout: 120000 });
+  const flow = await G(page, () => { const g = window.__game.game; return { pass: g.passes.length, ret: g.returns.length, used: g.plateUsed(), total: g.plateTotal() }; });
+  assert.equal(flow.pass, 1);
+  assert.equal(flow.ret, 1);
+  assert.ok(flow.used <= flow.total);
+  const saved = await G(page, () => { const t = window.RC.state.serialize(window.__game.game.s); return window.RC.state.parse(t).staff.map((m) => m.role); });
+  assert.ok(saved.some((r) => r !== 'generalist'), saved.join());
+});
+
 await scenario('分店：開分店（總經理＋雙店長制）、檢視各店、存檔後重載、主動關店（資遣費）', async (page) => {
   await page.click('[data-act=welcome-ok]');
   // 主店發展到上限：18×18、三星、有錢；員工 4 位：兩位 Lv.10、兩位 Lv.8

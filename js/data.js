@@ -145,6 +145,16 @@
     // 功能
     { id: 'register', name: '收銀機', cat: 'func', w: 1, h: 1, price: 500, level: 4, appeal: 2, fn: 'register', front: true, rot: true, desc: '客人吃完會自己到櫃檯結帳，不用等掌櫃，掌櫃就能專心煮菜上菜。' },
     { id: 'sink', name: '洗碗槽', cat: 'func', w: 1, h: 1, price: 300, level: 1, appeal: 0, fn: 'sink', desc: '客人用過的餐具要送到這裡，由員工洗乾淨；沒有乾淨的盤子就不能出餐。多一個洗碗槽，可以讓更多人同時洗碗。' },
+    // 出餐台：廚師煮好的菜先放在這裡，跑堂再端去客人桌上；滿了廚師就得等（容量由等級決定，多台相加）
+    { id: 'pass_1', name: '出餐台', cat: 'func', w: 1, h: 1, price: 400, level: 5, appeal: 1, fn: 'pass', cap: 4, desc: '廚師把煮好的菜放在這裡，跑堂來取餐上菜。可放 4 份餐點（多台相加）；放滿了廚師就得先等。放在爐灶旁最順手。' },
+    { id: 'pass_2', name: '雙層出餐台', cat: 'func', w: 1, h: 1, price: 1100, level: 9, appeal: 2, fn: 'pass', cap: 8, desc: '可放 8 份餐點（多台相加）。' },
+    { id: 'pass_3', name: '不鏽鋼出餐檯', cat: 'func', w: 1, h: 1, price: 3000, level: 13, appeal: 3, fn: 'pass', cap: 14, desc: '可放 14 份餐點（多台相加）。' },
+    { id: 'pass_4', name: '保溫出餐線', cat: 'func', w: 1, h: 1, price: 8000, level: 18, appeal: 4, fn: 'pass', cap: 24, desc: '可放 24 份餐點（多台相加）。' },
+    // 餐具回收台：客人吃完把餐具送到這裡，洗碗工再成批端去洗碗槽；滿了客人就把餐具留在桌上（要員工來收）
+    { id: 'ret_1', name: '餐具回收台', cat: 'func', w: 1, h: 1, price: 300, level: 5, appeal: 0, fn: 'return', cap: 6, desc: '客人用完餐會自己把餐具送來這裡，洗碗工成批端去洗碗槽，桌子馬上空出來。可放 6 份餐具（多台相加）；放滿了客人就把餐具留在桌上。' },
+    { id: 'ret_2', name: '回收推車', cat: 'func', w: 1, h: 1, price: 900, level: 9, appeal: 1, fn: 'return', cap: 12, desc: '可放 12 份餐具（多台相加）。' },
+    { id: 'ret_3', name: '傳送式回收台', cat: 'func', w: 1, h: 1, price: 2600, level: 13, appeal: 2, fn: 'return', cap: 20, desc: '可放 20 份餐具（多台相加）。' },
+    { id: 'ret_4', name: '自動回收輸送線', cat: 'func', w: 1, h: 1, price: 7000, level: 18, appeal: 3, fn: 'return', cap: 32, desc: '可放 32 份餐具（多台相加）。' },
     { id: 'fridge', name: '小冰箱', cat: 'func', w: 1, h: 1, price: 900, level: 6, appeal: 1, fn: 'fridge', front: true, rot: true, cap: 50, desc: '多放 50 份食材；食材取用方便，烹飪時間 -6%（冰箱類最多 3 台生效）。' },
     { id: 'fridge_big', name: '雙門冷藏櫃', cat: 'func', w: 1, h: 1, price: 4200, level: 12, appeal: 3, fn: 'fridge', front: true, rot: true, cap: 140, desc: '多放 140 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
     { id: 'freezer', name: '專業冷凍庫', cat: 'func', w: 1, h: 1, price: 14000, level: 20, appeal: 5, fn: 'fridge', front: true, rot: true, cap: 320, desc: '多放 320 份食材；烹飪時間 -6%（冰箱類最多 3 台生效）。' },
@@ -285,7 +295,7 @@
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 8, maxGap: 7 };
+  const GAME_VERSION = { current: 9, maxGap: 8 };
 
   /* ───────── 客流：尖峰與離峰 ───────── */
   // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
@@ -384,7 +394,23 @@
 
   /* ───────── 餐具 / 洗碗 ───────── */
   // 盤子總數 = base + 每個座位 perSeat 個；用過的先放在桌上，收拾後送到洗碗槽，洗乾淨才能再用
-  const PLATES = { base: 8, perSeat: 2, washTime: 1.0, dropTime: 0.3 };
+  const PLATES = { base: 8, perSeat: 2, washTime: 1.0, dropTime: 0.3, haulBatch: 6, tray: 3, trayReach: 10 };
+
+  /* ───────── 員工職務 ─────────
+   * 通才什麼都做（舊存檔與新招募的預設；店掌櫃、正副店長一律是通才，哪個職務缺人就由他們補）。
+   * 廚師只煮菜（用技術）；跑堂點餐、端菜、收桌子（用速度）；洗碗工收桌子、把回收台的餐具端去洗碗槽、洗碗。
+   * 某個職務一個人都沒有時（在班的員工裡），其他職務的人也會來幫忙。 */
+  const ROLE_LIST = ['generalist', 'cook', 'waiter', 'dishwasher'];
+  const ROLES = {
+    generalist: { name: '通才', desc: '什麼都做：點餐、煮菜、上菜、收桌、洗碗。店掌櫃、正副店長一律是通才，哪個職務缺人就去補。', duties: ['order', 'cook', 'serve', 'clean', 'haul', 'wash'] },
+    cook: { name: '廚師', desc: '只負責煮菜（看技術），煮好放到出餐台；出餐台滿了就得等。', duties: ['cook'] },
+    waiter: { name: '跑堂', desc: '點餐（單子馬上送進廚房）、從出餐台端菜上桌、收桌子（看速度）。', duties: ['order', 'serve', 'clean'] },
+    dishwasher: { name: '洗碗工', desc: '收桌子、把回收台的餐具成批端去洗碗槽、洗碗。', duties: ['clean', 'haul', 'wash'] },
+  };
+  /** 各職務服務一位客人的工時（秒，模擬量測的概數）；自動分配職務時依這個比例分人手 */
+  const ROLE_LOAD = { cookToPass: 1.1, cookToTable: 4.5, cookFatigue: 1.3, waiterFull: 9.5, waiterOrderOnly: 5.5, washReturn: 2.5, washTables: 6.5 };
+  /** 員工實際的職務：店掌櫃與正副店長強制是通才 */
+  const roleOf = (rec) => (rec.boss || rec.manager || rec.head || !ROLES[rec.role] ? 'generalist' : rec.role);
 
   /* ───────── 群體客人 / 候位 / 離線收益 ───────── */
   const PARTY_MAX = 4; // 每組人數上限
@@ -416,6 +442,6 @@
     maxStaffForLevel, RAISE, WAGE, MORALE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, BRANCH, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, ROLE_LIST, ROLES, ROLE_LOAD, roleOf, DAY, FLOW, BRANCH, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

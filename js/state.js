@@ -57,6 +57,7 @@
       wage: cand.boss ? 0 : Math.max(0, Math.floor(+cand.wage || 0)), // 日薪（每天午夜發放）
       unpaid: 0, // 連續領不到薪水的天數
       raise: 0, // 加薪百分比（0～20）：日薪增加，速度與技術也提升
+      role: 'generalist', // 職務：通才／廚師／跑堂／洗碗工（掌櫃與正副店長一律是通才）
     };
   }
 
@@ -65,7 +66,7 @@
    * 每間店只有自己的欄位（格局、員工、風評…）。店面物件用存取器把共用欄位接到公司層，
    * 所以 s.coins、s.level 這些既有寫法完全不用改；JSON.stringify(店面) 仍會得到「單店的平面存檔」。 */
   const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'ach', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
-  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'menu', 'order', 'stock', 'stockDay', 'markup', 'autoStock', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
+  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'menu', 'order', 'stock', 'stockDay', 'markup', 'autoStock', 'over', 'stats', 'sinkDirty', 'returnDirty', 'day', 'clock', 'syncedMin', 'report'];
 
   /** 把店面接上公司：共用欄位改成存取器（寫入公司層）。 */
   function attach(st, co) {
@@ -150,6 +151,7 @@
       over: null,
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       sinkDirty: 0,
+      returnDirty: 0,
       day: clockFrom ? clockFrom.day : 1,
       clock: clockFrom ? clockFrom.clock : D.DAY.defaultOpen * 60,
       syncedMin: 0,
@@ -198,6 +200,7 @@
       candidates: [],
       quest: { i: 0 },
       sinkDirty: 0, // 洗碗槽裡等著洗的髒盤子
+      returnDirty: 0, // 餐具回收台上等著端去洗碗槽的髒餐具
       day: 1,
       clock: D.DAY.defaultOpen * 60, // 一天中的第幾分鐘
       schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
@@ -280,6 +283,7 @@
         wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1,
         unpaid: Math.floor(num(m.unpaid, 0, 0, D.WAGE_QUIT_DAYS)),
         raise: Math.floor(num(m.raise, 0, 0, D.RAISE.max)),
+        role: D.ROLES[m.role] ? m.role : 'generalist',
       });
       maxId = Math.max(maxId, id);
     }
@@ -319,6 +323,7 @@
     }
     // 日薪只看員工本身（能力與資歷），存檔裡舊的「依到職順序」日薪一律重算（掌櫃不領薪水）
     staff.forEach((m) => {
+      if (m.boss || m.manager || m.head) m.role = 'generalist'; // 掌櫃與正副店長強制是通才
       m.wage = dailyWage(m);
       if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
     });
@@ -453,6 +458,7 @@
       playTime: num(rs.playTime, 0, 0, 1e10),
     };
     st.sinkDirty = Math.floor(num(rb.sinkDirty, 0, 0, 1e6));
+    st.returnDirty = Math.floor(num(rb.returnDirty, 0, 0, 1e6));
     st.day = Math.floor(num(rb.day, 1, 1, 1e6));
     st.clock = num(rb.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
     st.syncedMin = num(rb.syncedMin, 0, 0, 1e12);
@@ -496,6 +502,7 @@
     s.inventory = {};
     for (const [id, n] of Object.entries(raw.inventory || {})) if (D.furniture[id] && n > 0) s.inventory[id] = Math.floor(num(n, 0, 0, 9999));
     s.sinkDirty = Math.floor(num(raw.sinkDirty, 0, 0, 1e6));
+    s.returnDirty = Math.floor(num(raw.returnDirty, 0, 0, 1e6));
     s.day = Math.floor(num(raw.day, 1, 1, 1e6));
     s.clock = num(raw.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
     const sc = raw.schedule || {};

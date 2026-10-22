@@ -29,7 +29,7 @@
     return u;
   }
 
-  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_pay: '去結帳', paying: '收款中', wait_plate: '等乾淨盤子', to_sink: '送餐具去洗碗槽', dropping: '放下餐具', to_wash: '去洗碗', washing: '洗碗中' };
+  const STATE_SHORT = { idle: '待命', rest: '休息中', to_customer: '去點餐', taking: '點餐中', wait_stove: '等爐灶', to_stove: '去煮菜', cooking: '烹飪中', to_serve: '送餐中', serving: '上菜中', to_clean: '去收桌子', cleaning: '收拾中', to_pay: '去結帳', paying: '收款中', wait_plate: '等乾淨盤子', to_sink: '送餐具去洗碗槽', dropping: '放下餐具', to_wash: '去洗碗', washing: '洗碗中', to_pass: '送去出餐台', placing: '放上出餐台', to_pickup: '去出餐台取餐', picking: '取餐中', to_station: '去回收台收餐具' };
   const PANELS = {
     shop: { title: '商店', icon: 'shop' },
     inv: { title: '倉庫', icon: 'box' },
@@ -269,6 +269,9 @@
       else if (g.stockOn && g.s.menu.length && !g.sellable().length) msg = g.s.menu.some((id) => g.cookable(id)) ? `菜都賣完了，客人不會上門！每天 ${D.STOCK.deliveryHour}:00 到貨，到「菜單 → 進貨」調整進貨量。` : '菜單上的菜，爐灶都煮不動！到「商店」升級爐灶，或到「菜單」換上煮得動的菜。';
       else if (!g.seats.length) msg = '沒有座位！椅子必須緊鄰桌子，客人才會入座。';
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
+      else if (g.passes.length && g.passLoad() >= g.passCap && g.customers.some((c) => c.state === 'wait_food' && c.ticket && c.claimedBy == null && !c.onCounter)) msg = `出餐台滿了（${g.passCap} 份），廚師只能先等：多排幾位跑堂快點端菜，或升級出餐台增加容量。`;
+      else if (g.returns.length && g.returnLoad() >= g.returnCap && g.customers.some((c) => c.state === 'wait_pay')) msg = `餐具回收台滿了（${g.returnCap} 份），客人只好把餐具留在桌上：多排幾位洗碗工，或升級回收台增加容量。`;
+      else if (g.dayMode && g.isOpen() && g.customers.some((c) => c.state === 'wait_order') && !g.coveredDuties().has('order') && g.anyOnDuty()) msg = '在班的人裡沒有跑堂也沒有通才，沒人替客人點餐！到「員工」調整職務或排班。';
       else if (g.queuePeople() >= 2) {
         msg = this.queueMsg(g);
         isQueue = true;
@@ -885,12 +888,13 @@
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">店掌櫃・你</span> <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${m.speed.toFixed(2)}　技術 ${m.skill.toFixed(2)}　不會累，也不能開除，不用領薪水</div>
             <div class="sub">班別 ${shiftText(m.shift)}（每天最多 ${D.DAY.shiftHours} 小時）</div>
-            <div class="sub">什麼都會做：點餐、煮菜、上菜、收桌子、洗碗。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
+            <div class="sub">什麼都會做（通才）：哪個職務缺人就去補。<b>客人用餐後的結帳（電子支付）只有他能處理</b>。</div></div>
             <div><button class="btn small" data-act="boss-rename">改名</button></div></div>`;
         }
         return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(m.name)} <span class="tag gold">Lv.${m.level}${m.level >= D.STAFF_XP_STEPS.length ? '・滿級' : ''}</span>${m.head ? ' <span class="tag blue">正店長</span>' : m.manager ? ' <span class="tag blue">副店長</span>' : ''}${m.manager && !g.canCollect(m) ? ' <span class="tag">不能結帳</span>' : ''} <span class="tag" data-st="${m.id}"></span></div>
             <div class="sub">速度 ${g.speedOf(m).toFixed(2)}　技術 ${g.skillOf(m).toFixed(2)}${m.raise ? `（加薪加成 +${(m.raise * D.RAISE.abilityPerPct).toFixed(1)}%）` : ''}　班別 ${shiftText(m.shift)}</div>
+            <div class="sub">職務 ${m.manager ? `<b>通才</b>（${m.head ? '正' : '副'}店長一定是通才，哪個職務缺人就去補）` : `<select data-sel="role" data-id="${m.id}" aria-label="${esc(m.name)}的職務">${D.ROLE_LIST.map((r) => `<option value="${r}" ${r === D.roleOf(m) ? 'selected' : ''}>${D.ROLES[r].name}</option>`).join('')}</select>　<small>${D.ROLES[D.roleOf(m)].desc}</small>`}</div>
             <div class="sub">日薪 ${ic('coin', 1)}${fmt(g.wageOf(m))}${m.raise ? `（基本 ${fmt(m.wage)} ＋${m.raise}%）` : ''}${m.unpaid > 0 ? ` <span class="bad">⚠ 已 ${m.unpaid} 天沒領到薪水</span>` : ''}</div>
             <div class="sub raise-row">加薪 <input type="range" min="0" max="${D.RAISE.max}" step="1" value="${m.raise || 0}" data-raise="${m.id}" aria-label="${esc(m.name)}的加薪百分比"><b data-raise-label>${m.raise || 0}%</b></div>
             <div class="bar energy" style="max-width:180px"><i data-en="${m.id}" style="width:0"></i></div><div class="bar-label" data-entx="${m.id}"></div></div>
@@ -911,7 +915,19 @@
           <div class="sub">目前政策：每天午夜提撥福利金約 ${ic('coin', 1)}${fmt(fc.welfare)}（薪資 ${fmt(fc.payroll)} × ${s.welfare}%）；分紅是當天扣掉薪水與福利金後盈餘的 ${s.bonus}%，平分給 ${fc.n} 位員工。士氣會朝目標 <b>${fc.target}</b> 移動。</div>
           <div class="sub">員工超過 ${D.MORALE.crowdFrom} 位後，每多一位目標士氣 −${D.MORALE.crowdPer}；士氣高於 ${D.MORALE.mid} 速度與技術最多 +${Math.round(D.MORALE.abilityHi * 100)}%、低於則最多 −${Math.round(D.MORALE.abilityLo * 100)}%；連續 ${D.MORALE.lowDays} 天低於 ${D.MORALE.lowBelow} 就會有人離職。${s.lowMorale > 0 ? ` <span class="bad">（已連續 ${s.lowMorale} 天）</span>` : ''}</div>
         </div></div>`;
-      return `${gmNote}${welfareCard}<div class="section-title" style="margin-top:0">${g.isGM() ? '員工' : '店掌櫃 + 員工'} ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
+      const rc = g.roleCounts();
+      const ld = g.roleLoads();
+      const lt = ld.cook + ld.waiter + ld.dishwasher;
+      const rolePct = (r) => Math.round((100 * ld[r]) / lt);
+      const retLoad = g.returnLoad();
+      const roleCard = `<div class="row role-card"><div class="grow">
+          <div class="nm">職務分工　<span class="tag">${D.ROLE_LIST.map((r) => `${D.ROLES[r].name} ${rc[r]}`).join('・')}</span></div>
+          <div class="sub">${g.passes.length ? `出餐台 ${g.passLoad()} / ${g.passCap} 份` : '<span class="bad">沒有出餐台</span>：廚師煮好只能親自端去客人桌邊'}　${g.returns.length ? `餐具回收台 ${retLoad} / ${g.returnCap} 份` : '<span class="bad">沒有餐具回收台</span>：客人的餐具留在桌上，要員工收桌'}</div>
+          <div class="sub">流程：<b>跑堂</b>收單（單子馬上送進廚房）→ <b>廚師</b>煮好放上<b>出餐台</b>（放滿了就得等）→ 跑堂端菜上桌 → 客人吃完把餐具送到<b>回收台</b> → <b>洗碗工</b>成批搬去洗碗槽洗。沒有出餐台／回收台時照原本的流程。哪個職務沒人時，通才（掌櫃、正副店長）就去補。</div>
+          <div class="sub">目前這份菜單與廚房的建議人力比例：廚師 ${rolePct('cook')}%・跑堂 ${rolePct('waiter')}%・洗碗工 ${rolePct('dishwasher')}%。人手不到 4 位時分工反而比通才慢，建議先維持通才。</div>
+          <div style="margin-top:4px"><button class="btn small primary" data-act="auto-roles">自動分配職務</button> <button class="btn small" data-act="all-general">全部改回通才</button></div>
+        </div></div>`;
+      return `${gmNote}${roleCard}${welfareCard}<div class="section-title" style="margin-top:0">${g.isGM() ? '員工' : '店掌櫃 + 員工'} ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="sub" style="margin:6px 3px">每天午夜發日薪，合計 ${ic('coin', 1)}<b>${fmt(totalWage)}</b>；金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到就會辭職。</div>
         <div class="sub" style="margin:6px 3px">員工等級最高 Lv.${D.STAFF_XP_STEPS.length}。可以替每位員工<b>加薪 0～${D.RAISE.max}%</b>：日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +${D.RAISE.abilityPerPct}% 能力，最多 +${D.RAISE.max * D.RAISE.abilityPerPct}%）；調回 0% 能力就恢復。</div>
         <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；每間店實行雙店長制：<b>正店長</b>（Lv.${D.DAY.managerLevel} 以上）與<b>副店長</b>（Lv.${D.DAY.deputyLevel} 以上），正店長、Lv.${D.DAY.managerLevel} 以上的副店長才有結帳權限）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
@@ -982,13 +998,25 @@
       if (gaps.length) warns.push(`營業時間內 ${fmtH(gaps)} 沒有人在班，客人進不了門。`);
       if (thin.length) warns.push(`尖峰時段 ${fmtH(thin)} 只有 1 人在班，客人一多就會排隊流失，建議把其他人的班排進來。`);
       if (!gaps.includes(sc.close - 1) && cov.staff[sc.close - 1] === 0) warns.push('打烊時沒有人留下收店：最後一小時沒有人在班，髒碗要留給明天早上的人洗。');
+      // 職務缺口：有分工的店，營業時間內某個鐘點沒有人能煮菜／點餐上菜（本職或通才都算）
+      const hasSpec = D.ROLE_LIST.some((r) => r !== 'generalist' && s.staff.some((m) => D.roleOf(m) === r));
+      if (hasSpec) {
+        const lack = (name, roles) => {
+          const hs = [];
+          for (let h = 0; h < 24; h++) if (cov.open[h] && cov.staff[h] > 0 && roles.every((r) => cov.roles[r][h] === 0)) hs.push(h);
+          if (hs.length) warns.push(`${fmtH(hs)} 沒有${name}也沒有通才在班，這個時段沒有人${name === '廚師' ? '煮菜' : name === '跑堂' ? '點餐、上菜' : '洗碗'}（其他職務的人會勉強幫忙，效率很差）。`);
+        };
+        lack('廚師', ['cook', 'generalist']);
+        lack('跑堂', ['waiter', 'generalist']);
+        lack('洗碗工', ['dishwasher', 'generalist']);
+      }
       if (noPay.length) warns.push(`${fmtH(noPay)} 在班的人裡沒有店掌櫃或值班店長，客人只能自助結帳（風評較差）。`);
       const rows = [...s.staff]
         .sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0))
         .map((m) => {
           const cells = Array.from({ length: 24 }, (_, h) => `<i class="${(((h - m.shift) % 24) + 24) % 24 < D.DAY.shiftHours ? 'ok' : ''} ${cov.open[h] ? 'open' : ''}"></i>`);
           return `<div class="row"><div class="ico"><img class="px" src="${avatar(m.look, true, m.boss)}" width="30" height="54" alt=""></div>
-            <div class="grow"><div class="nm">${esc(m.name)} ${m.boss ? '<span class="tag gold">店掌櫃</span>' : m.head ? '<span class="tag blue">正店長</span>' : m.manager ? '<span class="tag blue">副店長</span>' : `<span class="tag gold">Lv.${m.level}</span>`}</div>
+            <div class="grow"><div class="nm">${esc(m.name)} ${m.boss ? '<span class="tag gold">店掌櫃</span>' : m.head ? '<span class="tag blue">正店長</span>' : m.manager ? '<span class="tag blue">副店長</span>' : `<span class="tag gold">Lv.${m.level}</span>`} <span class="tag">${D.ROLES[D.roleOf(m)].name}</span></div>
             <div class="sub">上班 <select data-sel="shift" data-id="${m.id}" aria-label="${esc(m.name)}的上班時間">${opt(0, 23, m.shift)}</select> 起連續 ${D.DAY.shiftHours} 小時（到 ${hhmm(m.shift + D.DAY.shiftHours)}）</div>
             ${bar(cells)}</div></div>`;
         })
@@ -998,7 +1026,7 @@
           <span class="sub">共 ${sc.close - sc.open} 小時；其餘時間是休息時間，客人不會上門</span></div>
         <div class="section-title">排班</div>
         <div class="sched-row"><button class="btn small ${sc.auto ? 'primary' : ''}" data-act="auto-sched">自動排班：${sc.auto ? '開' : '關'}</button>
-          <span class="sub">${sc.auto ? `開啟時，班表會跟著營業時間與人員自動調整：掌櫃開店、值班店長（或等級最高的員工）收店；Lv.${D.DAY.seniorLevel} 以上的資深員工優先補尖峰，等級較低的分成 2～3 個時段錯開上班` : '手動排班：自己決定每個人幾點上班'}</span></div>
+          <span class="sub">${sc.auto ? `開啟時，班表會跟著營業時間與人員自動調整：掌櫃開店、值班店長（或等級最高的員工）收店；Lv.${D.DAY.seniorLevel} 以上的資深員工優先補尖峰，等級較低的分成 2～3 個時段錯開上班；<b>廚師、跑堂、洗碗工各自依客流比例排班</b>，每個時段都盡量有人` : '手動排班：自己決定每個人幾點上班'}</span></div>
         <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天排定上班 ${D.DAY.shiftHours} 小時，離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
         <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、桌子收乾淨、<b>碗洗完才能下班</b>（沒有洗碗槽，或做不完時最多留 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班；所以<b>打烊時一定要有人在班</b>，才有人洗碗。</div>
         <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
@@ -1311,6 +1339,8 @@
           break;
         }
         case 'auto-sched': res(g.setAutoSchedule(!g.s.schedule.auto), 'click'); break;
+        case 'auto-roles': res(g.autoAssignRoles(), 'click'); break;
+        case 'all-general': res(g.clearRoles(), 'click'); break;
         case 'set-manager': res(g.assignManager(+id, el.dataset.post), 'buy'); break;
         case 'clear-manager': res(g.clearManager(id != null ? +id : undefined), 'click'); break;
         case 'boss-rename': this.showBossRename('staff'); A.sfx('click'); break;
@@ -1753,7 +1783,8 @@
           const g = this.game;
           const v = +sel.value;
           let r;
-          if (sel.dataset.sel === 'shift') r = g.setShift(+sel.dataset.id, v);
+          if (sel.dataset.sel === 'role') r = g.setRole(+sel.dataset.id, sel.value);
+          else if (sel.dataset.sel === 'shift') r = g.setShift(+sel.dataset.id, v);
           else if (sel.dataset.sel === 'open') r = g.setBusinessHours(v, Math.max(g.s.schedule.close, v + 1));
           else r = g.setBusinessHours(g.s.schedule.open, v);
           if (!r.ok) this.toast(r.msg, 'bad');
