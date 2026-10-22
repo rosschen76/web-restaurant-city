@@ -621,6 +621,14 @@ await scenario('菜單面板：學習／菜單／進貨／成就四個分頁；�
   await page.click('[data-act=order-step][data-id=danbing][data-d="10"]');
   assert.equal(await G(page, () => window.__game.game.s.order.danbing), before + 10);
   await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('10:00'), null, { timeout: 4000 });
+  // 自動補貨：補到倉庫上限、改成顯示預計補貨量
+  await page.click('[data-act=auto-stock]');
+  await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('自動補貨已開啟'), null, { timeout: 4000 });
+  assert.equal(await page.locator('[data-act=order-step]').count(), 0, '自動補貨時不顯示每日進貨量按鈕');
+  const filled = await G(page, () => { const g = window.__game.game; g.s.stock = {}; g.deliver(); return [g.stockTotal(), g.storageCap]; });
+  assert.equal(filled[0], filled[1], '補到倉庫上限');
+  await page.click('[data-act=auto-stock]');
+  await page.waitForFunction(() => document.querySelector('[data-act=order-step]') !== null, null, { timeout: 4000 });
   // 成就
   await page.click('[data-tab=ach]');
   await page.waitForFunction(() => document.querySelector('.win-body').innerText.includes('百味宗師'), null, { timeout: 4000 });

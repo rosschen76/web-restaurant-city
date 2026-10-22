@@ -786,30 +786,41 @@
       const total = g.stockTotal();
       const cap = g.storageCap;
       const pct = Math.min(100, Math.round((total / cap) * 100));
+      const plan = g.stockPlan();
+      let room = Math.max(0, cap - total);
       let planUnits = 0;
       let planCost = 0;
-      let room = Math.max(0, cap - total);
+      const planned = {};
       for (const id of s.menu) {
-        const n = Math.min(s.order[id] || 0, room);
+        const n = Math.min(plan[id] || 0, room);
+        planned[id] = n;
         room -= n;
         planUnits += n;
         planCost += n * D.dishes[id].cost;
       }
+      const auto = !!s.autoStock;
       const rows = s.menu
         .map((id) => {
           const d = D.dishes[id];
           const q = s.order[id] || 0;
           const stock = s.stock[id] || 0;
+          const orderLine = auto
+            ? `<div class="sub">${g.cookable(id) ? `明天 ${D.STOCK.deliveryHour}:00 預計補 <b>${planned[id]}</b> 份（${ic('coin', 1)}${fmt(planned[id] * d.cost)}）` : '<span class="bad">爐灶煮不動，不補貨</span>'}</div>`
+            : `<div class="sub order-row">每日進貨 <button class="btn small" data-act="order-step" data-id="${id}" data-d="-10">−10</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="-1">−1</button><b class="ord">${q}</b><button class="btn small" data-act="order-step" data-id="${id}" data-d="1">+1</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="10">+10</button></div>`;
           return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(id, 3, 'dish')}" width="36" height="36" alt=""></div>
             <div class="grow"><div class="nm">${d.name}</div>
-            <div class="sub">庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>　成本 ${ic('coin', 1)}${d.cost} / 份　每日 ${ic('coin', 1)}${fmt(q * d.cost)}</div>
-            <div class="sub order-row">每日進貨 <button class="btn small" data-act="order-step" data-id="${id}" data-d="-10">−10</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="-1">−1</button><b class="ord">${q}</b><button class="btn small" data-act="order-step" data-id="${id}" data-d="1">+1</button><button class="btn small" data-act="order-step" data-id="${id}" data-d="10">+10</button></div></div></div>`;
+            <div class="sub">庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>　成本 ${ic('coin', 1)}${d.cost} / 份${auto ? '' : `　每日 ${ic('coin', 1)}${fmt(q * d.cost)}`}</div>
+            ${orderLine}</div></div>`;
         })
         .join('');
+      const reserve = auto ? g.payrollToday() : 0;
+      const how = auto
+        ? `<b>自動補貨已開啟</b>：每天 <b>${D.STOCK.deliveryHour}:00</b> 把倉庫補到上限（${cap} 份），依各道菜被點到的比例分配容量，缺多少補多少；食材不會過期、賣完為止。會替當天的薪水與福利金（${ic('coin', 1)}${fmt(reserve)}）留著錢，剩下的才拿來進貨，金幣不夠就買得起多少進多少。<b>第一次補滿可能花掉大量金幣</b>，之後每天只補賣掉的量。下次預計補 ${planUnits} 份、${ic('coin', 1)}${fmt(planCost)}（目前有 ${fmt(s.coins)}）。`
+        : `每天 <b>${D.STOCK.deliveryHour}:00</b> 固定到貨：照下面的「每日進貨量」進貨，付食材成本；食材不會過期，賣完為止。今天的預計進貨 ${planUnits} 份、${ic('coin', 1)}${fmt(planCost)}（目前有 ${fmt(s.coins)}）。超過容量的部分不進貨；金幣不夠就買得起多少進多少。`;
       return `<div class="section-title" style="margin-top:0">倉庫 ${total} / ${cap} 份（冰箱越多、越高級，容量越大）</div>
         <div class="bar" style="margin:4px 3px"><i style="width:${pct}%"></i></div>
-        <div class="sub" style="margin:4px 3px;line-height:1.6">每天 <b>${D.STOCK.deliveryHour}:00</b> 固定到貨：照下面的「每日進貨量」進貨，付食材成本；食材不會過期，賣完為止。今天的預計進貨 ${planUnits} 份、${ic('coin', 1)}${fmt(planCost)}（目前有 ${fmt(s.coins)}）。超過容量的部分不進貨；金幣不夠就買得起多少進多少。</div>
-        <div style="margin:6px 3px"><button class="btn primary" data-act="order-auto">依等級自動分配進貨量</button></div>${rows || '<div class="empty">菜單是空的，先到「菜單」分頁上架。</div>'}`;
+        <div class="sub" style="margin:4px 3px;line-height:1.6">${how}</div>
+        <div style="margin:6px 3px"><button class="btn ${auto ? '' : 'primary'}" data-act="auto-stock">${auto ? '關閉自動補貨（改手動設定進貨量）' : '開啟自動補貨（每天補到倉庫上限）'}</button></div>${rows || '<div class="empty">菜單是空的，先到「菜單」分頁上架。</div>'}`;
     }
 
     htmlAch() {
@@ -1230,7 +1241,7 @@
         case 'menu-remove': res(g.removeMenu(id), 'click'); break;
         case 'markup-step': res(g.setMarkup(id, g.markupOf(id) + +el.dataset.d), 'click'); break;
         case 'order-step': res(g.setOrder(id, Math.max(0, (g.s.order[id] || 0) + +el.dataset.d)), 'click'); break;
-        case 'order-auto': res(g.autoOrder(), 'buy'); break;
+        case 'auto-stock': res(g.setAutoStock(!g.s.autoStock), 'click'); break;
         case 'theme': res(g.buyTheme(el.dataset.kind, id), 'buy'); this.view.layout(); break;
         case 'expand': {
           const r = res(g.expand(), 'levelup');

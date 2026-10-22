@@ -298,7 +298,7 @@ test('金幣不夠：買得起多少進多少；全部沒貨又買不起時，�
   assert.ok(broke.sellable().length > 0, '不會卡死');
 });
 
-test('進貨量：0～999、只能設上架的菜；自動分配依等級；午夜結算帶進貨花費', () => {
+test('進貨量：0～999、只能設上架的菜；午夜結算帶進貨花費', () => {
   const g = mk(14, (s) => {
     s.level = 20;
     s.dishes.soymilk = { cooked: 0 };
@@ -310,8 +310,7 @@ test('進貨量：0～999、只能設上架的菜；自動分配依等級；午�
   assert.equal(g.setOrder('boba', 5).ok, false, '沒上架');
   assert.equal(g.setOrder('danbing', 12).ok, true);
   assert.equal(g.s.order.danbing, 12);
-  assert.equal(g.autoOrder().ok, true);
-  assert.equal(g.s.order.danbing, RC.state.defaultOrderQty(2, 20));
+
   // 午夜結算事件含 procure
   const h = mk(15, (s) => {
     s.coins = 1000;
@@ -400,4 +399,140 @@ test('百味宗師：100 道全部大師 → 全部售價 +10%、烹飪時間 �
   const p = g.achPerks();
   assert.ok(p.price >= 0.1 - 1e-9 && Math.abs(p.cook - 0.05) < 1e-9);
   assert.ok(Object.keys(g.s.ach).length === D.ACHIEVEMENTS.length, '全部成就達成');
+});
+
+/* ───────── 自動補貨（補到倉庫上限） ───────── */
+
+const withMenu = (ids, mut) => (s) => {
+  s.coins = 1e7;
+  s.level = 50;
+  for (const id of ids) s.dishes[id] = { cooked: 0 };
+  s.menu = [...ids];
+  s.stock = {};
+  s.order = Object.fromEntries(ids.map((id) => [id, 1]));
+  if (mut) mut(s);
+};
+
+test('自動補貨：每天補到倉庫上限，不看每日進貨量；補滿後同一天不會再多進', () => {
+  const g = mk(21, withMenu(['danbing', 'luroufan', 'soymilk', 'meatballsoup']));
+  g.setAutoStock(true);
+  assert.equal(g.s.autoStock, true);
+  g.deliver();
+  assert.equal(g.stockTotal(), g.storageCap, '剛好補滿');
+  assert.equal(g.storageCap, S.base);
+  assert.equal(g.s.coins, 1e7 - Object.entries(g.s.stock).reduce((n, [id, q]) => n + q * D.dishes[id].cost, 0));
+  const coins = g.s.coins;
+  g.deliver();
+  assert.equal(g.s.coins, coins, '已經滿了，不再進貨也不花錢');
+  assert.equal(g.stockTotal(), g.storageCap);
+});
+
+test('自動補貨：依被點到的比例分配（主餐平分 82%、非主餐平分其餘），沒爐灶煮的菜不補', () => {
+  // 2 道主餐 + 2 道附餐：主餐各 41%、附餐各約 29%
+  const g = mk(22, withMenu(['danbing', 'luroufan', 'soymilk', 'meatballsoup']));
+  g.setAutoStock(true);
+  g.deliver();
+  const st = g.s.stock;
+  assert.ok(st.danbing === st.luroufan && st.soymilk === st.meatballsoup, JSON.stringify(st));
+  assert.ok(st.danbing > st.soymilk, '主餐比附餐多');
+  const w = g.demandWeights();
+  assert.ok(Math.abs(Object.values(w).reduce((a, b) => a + b, 0) - (1 - D.PAIR.single + D.PAIR.attach * (1 - D.PAIR.single) + D.PAIR.single)) < 1e-9);
+  // 牛排要專業爐台：沒有就不補
+  const h = mk(23, withMenu(['danbing', 'steak']));
+  h.setAutoStock(true);
+  h.deliver();
+  assert.equal(h.s.stock.steak || 0, 0);
+  assert.equal(h.s.stock.danbing, h.storageCap);
+  // 只有一種類型：全部平分
+  const k = mk(24, withMenu(['danbing', 'fantuan']));
+  k.setAutoStock(true);
+  k.deliver();
+  assert.equal(k.s.stock.danbing + k.s.stock.fantuan, k.storageCap);
+  assert.ok(Math.abs(k.s.stock.danbing - k.s.stock.fantuan) <= 1);
+});
+
+test('自動補貨：賣掉多少補多少；冰箱越大補得越多；菜單以外的存貨也占容量', () => {
+  const g = mk(25, withMenu(['danbing', 'luroufan'], (s) => {
+    s.items.push({ uid: 80, id: 'freezer', x: 7, y: 0, rot: 0 });
+  }));
+  g.setAutoStock(true);
+  g.deliver();
+  assert.equal(g.stockTotal(), S.base + D.furniture.freezer.cap);
+  g.s.stock.danbing -= 30;
+  g.s.stock.luroufan -= 12;
+  const before = g.stockTotal();
+  g.deliver();
+  assert.equal(g.stockTotal(), before + 42, '賣掉 42 份就補 42 份');
+  assert.equal(g.stockTotal(), g.storageCap);
+  // 菜單外的存貨（下架的菜）占掉一部分容量
+  const h = mk(26, withMenu(['danbing'], (s) => {
+    s.dishes.soymilk = { cooked: 0 };
+    s.stock = { soymilk: 15 };
+  }));
+  h.setAutoStock(true);
+  h.deliver();
+  assert.equal(h.s.stock.danbing, h.storageCap - 15);
+  assert.equal(h.stockTotal(), h.storageCap);
+});
+
+test('自動補貨：替今天的薪水與福利金留錢，金幣不夠就買得起多少進多少', () => {
+  const g = mk(27, withMenu(['danbing'], (s) => {
+    for (let i = 0; i < 2; i++) s.staff.push(RC.state.newStaff(30 + i, { name: 'x' + i, look: RC.state.makeLook(RC.util.makeRng(i)), speed: 1, skill: 1, wage: 200 }));
+  }));
+  const reserve = g.payrollToday();
+  assert.ok(reserve > 0);
+  g.s.coins = reserve + 10 * D.dishes.danbing.cost + 1;
+  g.setAutoStock(true);
+  g.deliver();
+  assert.equal(g.s.stock.danbing, 10, '只拿預留薪水之外的錢進貨');
+  assert.ok(g.s.coins >= reserve, '薪水還在');
+  // 手動進貨不預留
+  const h = mk(28, withMenu(['danbing']));
+  h.s.order.danbing = 5;
+  h.s.coins = 2 * D.dishes.danbing.cost + 1;
+  h.deliver();
+  assert.equal(h.s.stock.danbing, 2, '手動進貨不預留薪水，有多少錢買多少');
+});
+
+test('自動補貨：開啟時忽略每日進貨量、存檔保留開關、舊存檔預設關閉；午夜時鐘 10 點照常觸發', () => {
+  const g = mk(29, withMenu(['danbing', 'fantuan'], (s) => {
+    s.order = { danbing: 1, fantuan: 1 };
+    s.stockDay = 0;
+  }));
+  g.setAutoStock(true);
+  const back = RC.state.parse(RC.state.serialize(g.s));
+  assert.equal(back.autoStock, true);
+  const raw = JSON.parse(JSON.stringify(g.s));
+  delete raw.autoStock;
+  assert.equal(RC.state.normalize(raw).autoStock, false);
+  raw.autoStock = 'yes';
+  assert.equal(RC.state.normalize(raw).autoStock, false, '壞資料視為關閉');
+  toClock(g, 10 * 60 + 5);
+  assert.equal(g.stockTotal(), g.storageCap, '10 點的到貨會補滿');
+  g.setAutoStock(false);
+  assert.equal(g.s.autoStock, false);
+});
+
+test('自動補貨：分配結果的加總不會超過倉庫空位，也不會是負數', () => {
+  for (let seed = 40; seed < 60; seed++) {
+    const rng = RC.util.makeRng(seed);
+    const ids = D.dishList.filter((d) => D.stoveTier(d.stove) === 0).map((d) => d.id);
+    const pick = ids.filter(() => rng.chance(0.5)).slice(0, 12);
+    if (!pick.length) continue;
+    const g = mk(seed, withMenu(pick, (s) => {
+      s.stock = Object.fromEntries(pick.map((id) => [id, rng.int(0, 15)]));
+    }));
+    g.setAutoStock(true);
+    const before = g.stockTotal();
+    const free = g.storageCap - before;
+    const plan = g.stockPlan();
+    let sum = 0;
+    for (const [id, n] of Object.entries(plan)) {
+      assert.ok(Number.isInteger(n) && n >= 0, `${id} ${n}`);
+      sum += n;
+    }
+    assert.ok(sum <= Math.max(0, free), `加總 ${sum} 超過空位 ${free}`);
+    g.deliver();
+    assert.ok(g.stockTotal() <= Math.max(g.storageCap, before), '不會把倉庫越塞越滿');
+  }
 });

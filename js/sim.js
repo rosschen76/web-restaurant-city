@@ -993,15 +993,19 @@
       let units = 0;
       let spent = 0;
       let short = false;
+      const plan = this.stockPlan();
+      // 自動補貨會替今天要發的薪水與福利金留著錢，不會把金幣花光害員工領不到薪水
+      let budget = s.coins - (s.autoStock ? this.payrollToday() : 0);
       for (const id of s.menu) {
-        let n = Math.min(s.order[id] || 0, room);
+        let n = Math.min(plan[id] || 0, room);
         if (n <= 0) continue;
         const cost = D.dishes[id].cost;
-        if (s.coins < cost * n) {
-          n = Math.floor(s.coins / cost);
+        if (budget < cost * n) {
+          n = Math.max(0, Math.floor(budget / cost));
           short = true;
         }
         if (n <= 0) continue;
+        budget -= cost * n;
         s.coins -= cost * n;
         s.stock[id] = (s.stock[id] || 0) + n;
         room -= n;
@@ -1020,7 +1024,7 @@
       this.emit('delivery', { units, spent, short, credit });
       if (!this.quiet) {
         if (units > 0 || credit) this.toast(`食材到貨：${units} 份，花費 ${spent} 金幣${short ? '（金幣不夠，沒有全部進貨）' : ''}${credit ? `；供應商賒帳補了 ${credit} 份最便宜的菜` : ''}`, short ? 'bad' : 'info');
-        else if (s.menu.length) this.toast('今天沒有進貨（每日進貨量是 0，或倉庫已滿）', 'info');
+        else if (s.menu.length) this.toast(s.autoStock ? '今天不用補貨（倉庫已經是滿的）' : '今天沒有進貨（每日進貨量是 0，或倉庫已滿）', 'info');
       }
       this.changed();
     }
@@ -1035,12 +1039,88 @@
       return this.done();
     }
 
-    /** 把每日進貨量平均分給上架的菜（依目前等級預估一天的客人數）；回傳設定後的總量 */
-    autoOrder() {
+    /** 每天要發的薪水與福利金（自動補貨時先留起來） */
+    payrollToday() {
+      const total = this.s.staff.reduce((n, m) => n + this.wageOf(m), 0);
+      return Math.round(total * (1 + this.s.welfare / 100));
+    }
+
+    /**
+     * 每道菜被客人點到的預期比例（上架、爐灶煮得動的菜）：
+     * 有主餐時，每位客人點一道主餐（約 82%，平分給所有主餐），另有約 6 成會點附餐／單點一道非主餐（平分給所有非主餐）；
+     * 菜單上沒有主餐或沒有非主餐時，全部平分。
+     */
+    demandWeights() {
+      const ids = this.s.menu.filter((id) => this.cookable(id));
+      const mains = ids.filter((id) => D.dishes[id].kind === 'main');
+      const others = ids.filter((id) => D.dishes[id].kind !== 'main');
+      const w = {};
+      const P = D.PAIR;
+      const mainShare = mains.length && others.length ? 1 - P.single : mains.length ? 1 : 0;
+      const otherShare = mains.length && others.length ? P.attach * (1 - P.single) + P.single : others.length ? 1 : 0;
+      for (const id of mains) w[id] = mainShare / mains.length;
+      for (const id of others) w[id] = otherShare / others.length;
+      return w;
+    }
+
+    /**
+     * 今天 10 點要進的貨 { 菜 id: 份數 }。
+     * 自動補貨：把倉庫補到上限——依預期的點餐比例分配容量，每道菜補到它該有的量（已經夠的不補），
+     * 全部加起來不超過倉庫的空位。手動：照每日進貨量。
+     */
+    stockPlan() {
       const s = this.s;
-      if (!s.menu.length) return this.fail('菜單是空的');
-      const q = RC.state.defaultOrderQty(s.menu.length, s.level);
-      for (const id of s.menu) s.order[id] = q;
+      if (!s.autoStock) return Object.fromEntries(s.menu.map((id) => [id, s.order[id] || 0]));
+      const w = this.demandWeights();
+      const ids = Object.keys(w);
+      const plan = {};
+      if (!ids.length) return plan;
+      const free = Math.max(0, this.storageCap - this.stockTotal());
+      if (free <= 0) return plan;
+      // 菜單以外的存貨也占容量：可分配給菜單的容量 = 上限 - 菜單以外的存貨
+      const menuStock = s.menu.reduce((n, id) => n + (s.stock[id] || 0), 0);
+      const room = Math.max(0, this.storageCap - (this.stockTotal() - menuStock));
+      const W = ids.reduce((n, id) => n + w[id], 0);
+      // 最大餘數法：各菜的目標庫存加總剛好等於可分配的容量
+      const raw = ids.map((id) => ({ id, t: (room * w[id]) / W }));
+      const target = {};
+      let used = 0;
+      for (const r of raw) {
+        target[r.id] = Math.floor(r.t);
+        used += target[r.id];
+      }
+      for (const r of [...raw].sort((a, b) => b.t - Math.floor(b.t) - (a.t - Math.floor(a.t)))) {
+        if (used >= room) break;
+        target[r.id]++;
+        used++;
+      }
+      // 缺多少補多少；缺口加總超過倉庫空位時，等比例縮減
+      const need = {};
+      let sum = 0;
+      for (const id of ids) {
+        need[id] = Math.max(0, target[id] - (s.stock[id] || 0));
+        sum += need[id];
+      }
+      if (sum <= free) return need;
+      let left = free;
+      const parts = ids.map((id) => ({ id, q: (need[id] * free) / sum }));
+      for (const p of parts) {
+        plan[p.id] = Math.floor(p.q);
+        left -= plan[p.id];
+      }
+      for (const p of [...parts].sort((a, b) => b.q - Math.floor(b.q) - (a.q - Math.floor(a.q)))) {
+        if (left <= 0) break;
+        if (plan[p.id] < need[p.id]) {
+          plan[p.id]++;
+          left--;
+        }
+      }
+      return plan;
+    }
+
+    /** 開關自動補貨（每天 10 點把倉庫補到上限，不用再設每日進貨量） */
+    setAutoStock(on) {
+      this.s.autoStock = !!on;
       return this.done();
     }
 
