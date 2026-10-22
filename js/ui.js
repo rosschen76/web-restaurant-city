@@ -469,7 +469,7 @@
       const repCls = rep <= -7 ? 'bad' : rep >= 3 ? 'good' : '';
       const kind = D.demandKind(D.demandAt(s.clock / 60));
       const rush = open ? `<span class="${kind === 'peak' ? 'peak' : kind === 'off' ? 'dim' : ''}">${D.DEMAND_NAMES[kind]}</span>` : '';
-      const doom = s.lowDays > 0 ? `　<span class="bad">⚠ 谷底 ${s.lowDays}/${D.REPUTATION.loseDays} 天</span>` : '';
+      const doom = s.lowDays > 0 ? `<span class="bad doom">⚠ 谷底 ${s.lowDays}/${D.REPUTATION.loseDays} 天</span>` : '';
       const html = `第 ${s.day} 天 ${hh}:${mm}・<span class="${open ? 'good' : 'dim'}">${open ? '營業中' : '休息中'}</span>${rush ? '・' + rush : ''}　風評 <b class="${repCls}">${rep > 0 ? '+' : ''}${rep.toFixed(1)}</b>${doom}`;
       if (this.el.clock.innerHTML !== html) this.el.clock.innerHTML = html;
     }
