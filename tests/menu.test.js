@@ -164,7 +164,7 @@ test('爐灶等級不夠就賣不了：菜單上煮不動的菜客人不會點',
   assert.deepEqual(g.sellable(), ['danbing']);
   for (let i = 0; i < 200; i++) {
     g.s.stock.danbing = 5;
-    assert.equal(g.pickDish(), 'danbing');
+    assert.equal(g.pickOrder().dish, 'danbing');
   }
   // 換成專業爐台就煮得動了
   g.s.items.find((i) => i.id === 'stove_gas').id = 'stove_pro';
@@ -201,10 +201,10 @@ test('點餐扣庫存；賣完的菜不再被點、全部賣完客人就不上�
   const g = mk(7, (s) => {
     s.stock = { danbing: 2 };
   });
-  assert.equal(g.pickDish(), 'danbing');
-  assert.equal(g.pickDish(), 'danbing');
+  assert.equal(g.pickOrder().dish, 'danbing');
+  assert.equal(g.pickOrder().dish, 'danbing');
   assert.equal(g.s.stock.danbing, 0);
-  assert.equal(g.pickDish(), null);
+  assert.equal(g.pickOrder(), null);
   assert.equal(g.canOpenDoor(), false, '菜都賣完了，客人不會上門');
   g.s.stock.danbing = 1;
   assert.equal(g.canOpenDoor(), true);

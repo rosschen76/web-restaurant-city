@@ -368,7 +368,8 @@
       const left = c.eatTotal ? c.t / c.eatTotal : 1;
       // 吃越多，餐點越淡（以透明度表示）
       g.globalAlpha = 0.35 + 0.65 * Math.max(0, Math.min(1, left));
-      g.drawImage(spr, Math.round(p[0] - 6), Math.round(p[1] - z - 9));
+      g.drawImage(spr, Math.round(p[0] - (c.extra ? 9 : 6)), Math.round(p[1] - z - 9));
+      if (c.extra) g.drawImage(AP.dish(c.extra), Math.round(p[0] + 1), Math.round(p[1] - z - 10)); // 套餐：兩道菜並排
       g.globalAlpha = 1;
     }
 
@@ -428,8 +429,9 @@
           const b = AP.bubble(g, c._sx, top + bob, 14, 11, '#fffaf0');
           g.drawImage(AP.fx('dots'), b.x + 1, b.y + 1);
         } else if (c.state === 'wait_food') {
-          const b = AP.bubble(g, c._sx, top + bob, 18, 18, c.p < 0.3 ? '#ffd0c8' : '#fffaf0');
+          const b = AP.bubble(g, c._sx, top + bob, c.extra ? 32 : 18, 18, c.p < 0.3 ? '#ffd0c8' : '#fffaf0');
           g.drawImage(AP.dish(c.dish), b.x + 2, b.y + 2);
+          if (c.extra) g.drawImage(AP.dish(c.extra), b.x + 16, b.y + 2);
           this.patience(g, c, top + bob + 2);
         } else if (c.state === 'wait_pay') {
           // 吃完了：頭上出現金幣，等店掌櫃來結帳；掌櫃已經在路上時泡泡不再跳動

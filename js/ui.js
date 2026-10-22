@@ -668,6 +668,18 @@
       return `<div class="chips">${chip('all', '全部', `${Object.keys(s.dishes).length}/${D.dishList.length}`)}${D.DISH_CATS.map((c) => chip(c.id, c.name, `${D.dishList.filter((d) => d.cat === c.id && s.dishes[d.id]).length}/10`)).join('')}</div>`;
     }
 
+    /** 類別・餐點種類（相同就只寫一次） */
+    kindLabel(d) {
+      const c = D.dishCats[d.cat].name;
+      const k = D.KIND_NAMES[d.kind];
+      return c === k ? c : `${c}・${k}`;
+    }
+
+    /** 菜系與口味標籤（搭配用） */
+    flavorTags(d) {
+      return `<span class="tag flav">${D.CUISINE_NAMES[d.cu]}</span>${[...d.tg].map((t) => `<span class="tag flav">${D.TAG_NAMES[t]}</span>`).join('')}`;
+    }
+
     stars(m) {
       return Array.from({ length: D.MASTERY_MAX }, (_, i) => (i < m ? '★' : '<span class="off">★</span>')).join('');
     }
@@ -694,12 +706,13 @@
             const on = s.menu.includes(d.id);
             return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(d.id, 3, 'dish')}" width="36" height="36" alt=""></div>
               <div class="grow"><div class="nm">${d.name} <span class="mastery">${this.stars(info.mastery)}</span> ${on ? '<span class="tag good">上架中</span>' : ''}</div>
-              <div class="sub">${cname} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s</div>
+              <div class="sub">${this.kindLabel(d)} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s</div>
+              <div class="sub">${this.flavorTags(d)}</div>
               <div class="sub">已烹飪 ${fmt(info.cooked)} 次${next ? `（下一級 ${fmt(next)} 次）` : '（大師）'}</div></div></div>`;
           }
           const lack = s.coins < d.learn;
           return `<div class="row ${locked ? 'dim' : ''}"><div class="ico"><img class="px" src="${AP.iconURL(d.id, 3, 'dish')}" width="36" height="36" alt="" style="${locked ? 'filter:brightness(0.2)' : ''}"></div>
-            <div class="grow"><div class="nm">${locked ? '？？？' : d.name}</div><div class="sub">${locked ? `${cname}　Lv.${d.level} 解鎖` : `${cname} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${d.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s`}</div></div>
+            <div class="grow"><div class="nm">${locked ? '？？？' : d.name}</div><div class="sub">${locked ? `${cname}　Lv.${d.level} 解鎖` : `${this.kindLabel(d)} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${d.price}　成本 ${ic('coin', 1)}${d.cost}　烹飪 ${d.cook}s<br>${this.flavorTags(d)}`}</div></div>
             ${locked ? `<span class="tag">${ic('lock', 1)} Lv.${d.level}</span>` : `<button class="btn primary" data-act="learn" data-id="${d.id}" ${lack ? 'disabled' : ''}>學習 ${ic('coin', 1)}${fmt(d.learn)}</button>`}</div>`;
         })
         .join('');
@@ -716,13 +729,21 @@
           const d = D.dishes[id];
           const info = g.dishInfo(id);
           const stock = s.stock[id] || 0;
-          const warn = !g.cookable(id) ? `` : '';
+          const cap = D.markupCap(info.mastery);
+          const mk = info.markup;
+          const markup = cap < 1
+            ? `<div class="sub order-row">漲價 <span class="dimtxt">熟練度 2 級起可以漲價</span></div>`
+            : `<div class="sub order-row">漲價 <button class="btn small" data-act="markup-step" data-id="${id}" data-d="-1" ${mk <= 0 ? 'disabled' : ''}>−</button><b class="ord">${mk}%</b><button class="btn small" data-act="markup-step" data-id="${id}" data-d="1" ${mk >= cap ? 'disabled' : ''}>＋</button> <span class="dimtxt">（上限 ${cap}%）</span></div>`;
           return `<div class="row"><div class="ico"><img class="px" src="${AP.iconURL(id, 3, 'dish')}" width="36" height="36" alt=""></div>
             <div class="grow"><div class="nm">${d.name} <span class="mastery">${this.stars(info.mastery)}</span></div>
-            <div class="sub">${D.dishCats[d.cat].name} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>${stock <= 0 ? ' <span class="bad">賣完了</span>' : ''}</div></div>
+            <div class="sub">${this.kindLabel(d)} ${this.stoveTag(d)}　售價 ${ic('coin', 1)}${info.price}　庫存 <b class="${stock > 0 ? '' : 'bad'}">${stock}</b>${stock <= 0 ? ' <span class="bad">賣完了</span>' : ''}</div>
+            <div class="sub">${this.flavorTags(d)}</div>${markup}</div>
             <button class="btn small" data-act="menu-remove" data-id="${id}">下架</button></div>`;
         })
         .join('');
+      const mkTotal = g.markupTotal();
+      const arr = g.arrivalMult();
+      const mkLine = `<div class="sub" style="margin:2px 3px;line-height:1.6">上架品項的<b>漲價合計 ${mkTotal}%</b>，來客率 <b class="${arr < 0.995 ? 'bad' : ''}">${arr >= 0.995 ? '不受影響' : '−' + (Math.round((1 - arr) * 1000) / 10) + '%'}</b>。熟練度越高越能漲（2 級 1% … 6 級 5%），少數幾道小漲有賺頭，全部都漲來客率會掉得更快。</div>`;
       const learned = D.dishList
         .filter((d) => s.dishes[d.id] && !s.menu.includes(d.id) && (cat === 'all' || d.cat === cat))
         .sort((a, b) => a.level - b.level)
@@ -735,8 +756,27 @@
         })
         .join('');
       return `<div class="section-title" style="margin-top:0">「${esc(s.name)}」的菜單 ${s.menu.length} / ${D.STOCK.menuMax}${full ? '（已滿，先下架才能換新菜）' : ''}</div>
-        <div class="sub" style="margin:2px 3px">客人只會點上架、有庫存、而且爐灶煮得動的菜。每間店的菜單各自設定。</div>${onRows}
+        <div class="sub" style="margin:2px 3px">客人只會點上架、有庫存、而且爐灶煮得動的菜。每間店的菜單各自設定。</div>${mkLine}${onRows}${this.htmlPairs()}
         <div class="section-title">可以上架的菜</div>${this.catChips(cat)}${learned || '<div class="empty">沒有其他學會的菜可以上架。到「學習」分頁學新菜吧。</div>'}`;
+    }
+
+    /** 搭配預覽：目前菜單裡「主餐 + 附餐」的好搭配與地雷 */
+    htmlPairs() {
+      const s = this.game.s;
+      const mains = s.menu.filter((id) => D.dishes[id].kind === 'main');
+      const others = s.menu.filter((id) => D.dishes[id].kind !== 'main');
+      const title = `<div class="section-title">套餐搭配（單人套餐）</div>`;
+      const note = `<div class="sub" style="margin:2px 3px;line-height:1.6">客人點一道主餐，有 ${Math.round(D.PAIR.attach * 100)}% 機率再加一道附餐（湯、飲料、小吃、甜點）：好搭配加價（絕配 ×${D.PAIR.levels[2].mult}、好搭配 ×${D.PAIR.levels[1].mult}）、小費變多，也更常被點；地雷搭配打折（×${D.PAIR.levels['-1'].mult}～×${D.PAIR.levels['-2'].mult}）。套餐兩道一起煮，烹飪時間為加總的 ${Math.round(D.PAIR.cookFactor * 100)}%。</div>`;
+      if (!mains.length || !others.length) return title + note + `<div class="empty" style="padding:10px">${!mains.length ? '菜單上沒有主餐，客人只會單點。' : '菜單上沒有湯、飲料、小吃或甜點，客人不會點套餐。'}</div>`;
+      const pairs = [];
+      for (const a of mains) for (const b of others) pairs.push({ a, b, ...D.pairScore(a, b) });
+      const line = (p) => `<div class="row pair-row"><div class="grow"><div class="nm">${D.dishes[p.a].name} ＋ ${D.dishes[p.b].name} <span class="tag ${p.score > 0 ? 'good' : p.score < 0 ? 'warn' : ''}">${D.PAIR.levels[p.score].name}</span></div><div class="sub">${p.why.length ? p.why.join('　') : '沒有特別的加分或扣分'}</div></div></div>`;
+      const good = pairs.filter((p) => p.score > 0).sort((x, y) => y.score - x.score).slice(0, 5);
+      const bad = pairs.filter((p) => p.score < 0).sort((x, y) => x.score - y.score).slice(0, 5);
+      const avg = pairs.reduce((n, p) => n + p.score, 0) / pairs.length;
+      return `${title}${note}<div class="sub" style="margin:2px 3px">目前菜單的平均搭配分數 <b>${avg >= 0 ? '+' : ''}${avg.toFixed(2)}</b>（${pairs.length} 種組合）</div>
+        ${good.length ? `<div class="sub" style="margin:6px 3px 0"><b>好搭配</b></div>${good.map(line).join('')}` : ''}
+        ${bad.length ? `<div class="sub" style="margin:6px 3px 0"><b class="bad">地雷組合（考慮換掉其中一道）</b></div>${bad.map(line).join('')}` : ''}`;
     }
 
     htmlStock() {
@@ -1187,6 +1227,7 @@
         case 'menu-cat': this.panel.cat = el.dataset.cat; A.sfx('click'); this.renderPanel(); break;
         case 'menu-add': res(g.addMenu(id), 'buy'); break;
         case 'menu-remove': res(g.removeMenu(id), 'click'); break;
+        case 'markup-step': res(g.setMarkup(id, g.markupOf(id) + +el.dataset.d), 'click'); break;
         case 'order-step': res(g.setOrder(id, Math.max(0, (g.s.order[id] || 0) + +el.dataset.d)), 'click'); break;
         case 'order-auto': res(g.autoOrder(), 'buy'); break;
         case 'theme': res(g.buyTheme(el.dataset.kind, id), 'buy'); this.view.layout(); break;
@@ -1517,7 +1558,7 @@
         }
         const party = g.parties.find((x) => x.id === c.party);
         const st = ({ enter: '走向座位', browse: '看菜單中', wait_order: '等待點餐', ordering: '正在點餐', wait_food: '等待上菜', eat: '用餐中', wait_pay: '吃完了，等結帳', leave: '準備離開' }[c.state] || '') + (party && party.size > 1 ? `　同行 ${party.size} 人` : '');
-        const want = c.dish ? `　想吃：${D.dishes[c.dish].name}` : '';
+        const want = c.dish ? `　想吃：${D.dishes[c.dish].name}${c.extra ? '＋' + D.dishes[c.extra].name : ''}` : '';
         this.setText(el.querySelector('[data-f=st]'), st + want);
         const rush = el.querySelector('[data-f=rush]');
         if (rush) rush.hidden = !(c.state === 'wait_pay' && !c.rush && c.payBy == null);

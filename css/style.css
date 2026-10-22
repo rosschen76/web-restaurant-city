@@ -259,3 +259,6 @@ select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: va
 .tag.warn { background: var(--bad); }
 .order-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .order-row .ord { min-width: 3em; text-align: center; }
+.tag.flav { background: #6b5a8e; margin-right: 3px; }
+.dimtxt { opacity: 0.65; }
+.pair-row { margin: 4px 3px; padding: 5px 8px; }

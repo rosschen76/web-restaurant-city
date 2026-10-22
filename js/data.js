@@ -14,6 +14,8 @@
   const dishes = Object.fromEntries(dishList.map((d) => [d.id, d]));
   const dishCats = Object.fromEntries(DISH_CATS.map((c) => [c.id, c]));
   const KIND_NAMES = { main: '主餐', side: '小吃', soup: '湯品', drink: '飲料', dessert: '甜點' };
+  const CUISINE_NAMES = { T: '台式中式', W: '西式', A: '日韓泰異國' };
+  const TAG_NAMES = { R: '重口', L: '清爽', S: '辣', T: '甜', F: '炸', C: '冰涼' };
   // 爐灶等級：高等級的爐灶可以煮低等級的菜。每道菜要有「等級夠的爐灶」才能賣
   const STOVE_TIERS = [
     { id: 'gas', name: '瓦斯爐' },
@@ -31,6 +33,75 @@
     return lv;
   }
   const MASTERY_MAX = MASTERY_STEPS.length;
+
+  /* ───────── 漲價 ─────────
+   * 熟練度 2 級起可以替單品漲價，上限隨熟練度提高：2 級 1%、3 級 2% … 6 級 5%（每間店各自設定）。
+   * 上架品項的漲價幅度加總（合計）越多，來客率越低：來客率 = 1 - loss × (合計 / 100)^2（20 道全漲 5% 合計 100 → -10%）。
+   * 少數幾道小漲有賺頭，全部都漲會得不償失。 */
+  const MARKUP = { max: 5, loss: 0.1, scale: 100, exp: 2 };
+  const markupCap = (mastery) => Math.min(MARKUP.max, Math.max(0, mastery - 1));
+  /** 合計漲價 → 來客率倍數（1＝不受影響） */
+  const arrivalRate = (total) => 1 - MARKUP.loss * Math.pow(Math.min(total, 100) / MARKUP.scale, MARKUP.exp);
+
+  /* ───────── 單人套餐與搭配 ─────────
+   * 客人點「主餐 + 一道附餐（湯、飲料、小吃、甜點）」，視為同一張單：一次煮完、一次上桌、一次結帳。
+   * 搭配分數 -2～+2 決定套餐的售價倍率與小費，也決定客人從你的菜單裡挑哪道附餐（好搭配的更常被點）。
+   * 分數 = 口味規則（解膩、炸物配冰涼、辣配甜涼、重口配重口扣分、菜系一致加分、中西不搭扣分…）+ 經典配對表（±1）。
+   * tg 口味標籤：R 重口油膩 L 清爽 S 辣 T 甜 F 炸 C 冰涼；cu 菜系：T 台式中式／W 西式／A 日韓泰異國。 */
+  const PAIR = {
+    attach: 0.5, // 點了主餐之後，菜單上有附餐時多點一道的機率
+    single: 0.18, // 不點主餐、只點一道湯／飲料／小吃／甜點的機率（菜單上沒有主餐時一定如此）
+    cookFactor: 0.75, // 套餐的烹飪時間 = 兩道加總 × 0.75
+    eatFactor: 0.8, // 用餐時間 = 兩道加總 × 0.8
+    levels: {
+      2: { name: '絕配', mult: 1.25, tip: 1.6, weight: 3 },
+      1: { name: '好搭配', mult: 1.12, tip: 1.3, weight: 2 },
+      0: { name: '普通', mult: 1, tip: 1, weight: 1 },
+      '-1': { name: '不太搭', mult: 0.9, tip: 0.7, weight: 0.5 },
+      '-2': { name: '災難', mult: 0.8, tip: 0.4, weight: 0.25 },
+    },
+  };
+  // 經典配對（主餐, 附餐, 說明）：額外加兩分／扣兩分（總分仍限制在 -2～+2）
+  const PAIR_GOOD = [
+    ['steak', 'cornsoup', '牛排配玉米濃湯'], ['steak', 'borscht', '牛排配羅宋湯'], ['pasta', 'cornsoup', '義大利麵配玉米濃湯'], ['pizza', 'borscht', '披薩配羅宋湯'],
+    ['burger', 'juice', '漢堡配鮮榨果汁'], ['luroufan', 'meatballsoup', '滷肉飯配貢丸湯'], ['luroufan', 'fishballsoup', '滷肉飯配魚丸湯'], ['chickenrice', 'clamsoup', '雞肉飯配蛤蜊湯'],
+    ['beefnoodle', 'braised', '牛肉麵配滷味'], ['friedrice', 'meatballsoup', '炒飯配貢丸湯'], ['danbing', 'soymilk', '蛋餅配豆漿'], ['fantuan', 'soymilk', '飯糰配豆漿'],
+    ['shaobing', 'soymilk', '燒餅油條配豆漿'], ['toast', 'coffee', '吐司配咖啡'], ['sandwich', 'coffee', '三明治配咖啡'], ['potsticker', 'hotsour', '鍋貼配酸辣湯'],
+    ['steamdumpling', 'hotsour', '蒸餃配酸辣湯'], ['sushi', 'oolong', '壽司配烏龍茶'], ['sashimi', 'oolong', '生魚片配烏龍茶'],
+    ['roastduck', 'oolong', '烤鴨配烏龍茶'], ['dongpo', 'oolong', '東坡肉配烏龍茶'], ['hotpot', 'plum', '麻辣鍋配酸梅湯'], ['sukiyaki', 'douhua', '壽喜燒配豆花'],
+    ['ramen', 'koreanchicken', '拉麵配韓式炸雞'], ['curry', 'blacktea', '咖哩飯配紅茶'], ['sesamechicken', 'sishen', '麻油雞配四神湯'], ['clayrice', 'wintermelon', '煲仔飯配冬瓜茶'],
+  ];
+  const PAIR_BAD = [
+    ['luroufan', 'strawcake', '肉燥飯配蛋糕'], ['luroufan', 'tiramisu', '肉燥飯配提拉米蘇'], ['luroufan', 'millecrepe', '肉燥飯配千層蛋糕'], ['beefnoodle', 'strawcake', '牛肉麵配蛋糕'],
+    ['friedrice', 'tiramisu', '炒飯配提拉米蘇'], ['steak', 'douhua', '牛排配豆花'], ['steak', 'tangyuan', '牛排配紅豆湯圓'], ['steak', 'meatballsoup', '牛排配貢丸湯'],
+    ['pizza', 'hotsour', '披薩配酸辣湯'], ['burger', 'tangyuan', '漢堡配湯圓'], ['hotpot', 'hotsour', '麻辣鍋配酸辣湯'], ['stonepot', 'hotsour', '石頭火鍋配酸辣湯'],
+    ['kungpao', 'hotsour', '宮保雞丁配酸辣湯'], ['sushi', 'pineapple', '壽司配鳳梨酥'], ['porkchop', 'stinky', '排骨飯配臭豆腐'], ['lobster', 'blacktea', '龍蝦配古早味紅茶'],
+  ];
+  const pairGood = new Map(PAIR_GOOD.map(([a, b, t]) => [a + '|' + b, t]));
+  const pairBad = new Map(PAIR_BAD.map(([a, b, t]) => [a + '|' + b, t]));
+  /** 主餐 a 配附餐 b 的搭配分數：{ score -2～+2, why: [說明…] } */
+  function pairScore(a, b) {
+    const A = dishes[a];
+    const B = dishes[b];
+    let sc = 0;
+    const why = [];
+    const has = (d, c) => d.tg.includes(c);
+    const add = (n, t) => {
+      sc += n;
+      why.push((n > 0 ? '＋' : '－') + t);
+    };
+    if (has(A, 'R') && (has(B, 'L') || has(B, 'C'))) add(1, '清爽解膩');
+    if (has(A, 'F') && has(B, 'C')) add(1, '炸物配冰涼');
+    if (has(A, 'S') && (has(B, 'T') || has(B, 'C'))) add(1, '甜涼解辣');
+    if (has(A, 'S') && has(B, 'S')) add(-1, '兩道都辣');
+    if (has(A, 'R') && has(B, 'R')) add(-1, '兩道都油膩');
+    if (has(A, 'T') && has(B, 'T')) add(-1, '太甜');
+    if (A.cu === B.cu && A.cu !== 'T') add(1, '菜系一致');
+    else if ((A.cu === 'T' && B.cu === 'W') || (A.cu === 'W' && B.cu === 'T')) add(-1, '中西不搭');
+    if (pairGood.has(a + '|' + b)) add(2, '經典：' + pairGood.get(a + '|' + b));
+    if (pairBad.has(a + '|' + b)) add(-2, '地雷：' + pairBad.get(a + '|' + b));
+    return { score: Math.max(-2, Math.min(2, sc)), why };
+  }
 
   /* ───────── 菜單、進貨與庫存 ─────────
    * 每間店從學會的菜裡挑最多 menuMax 道上架；客人只會點上架、有庫存、爐灶煮得動的菜。
@@ -214,7 +285,7 @@
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 6, maxGap: 5 };
+  const GAME_VERSION = { current: 7, maxGap: 6 };
 
   /* ───────── 客流：尖峰與離峰 ───────── */
   // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
@@ -336,7 +407,7 @@
 
   RC.data = {
     DX, DY, DOOR_Y,
-    dishList, dishes, DISH_CATS, dishCats, KIND_NAMES, STOVE_TIERS, stoveTier, MASTERY_STEPS, MASTERY_MAX, masteryLevel, STOCK, ACHIEVEMENTS, achievements,
+    dishList, dishes, DISH_CATS, dishCats, KIND_NAMES, CUISINE_NAMES, TAG_NAMES, STOVE_TIERS, stoveTier, MASTERY_STEPS, MASTERY_MAX, masteryLevel, MARKUP, markupCap, arrivalRate, PAIR, PAIR_GOOD, PAIR_BAD, pairScore, STOCK, ACHIEVEMENTS, achievements,
     furnitureList, furniture, FURNITURE_CATS, LEGACY_REFUND,
     floorList, floors, wallList, walls,
     expansions,

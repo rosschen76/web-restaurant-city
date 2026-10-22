@@ -267,8 +267,9 @@
       const cooked = rec ? rec.cooked : 0;
       const m = D.masteryLevel(cooked);
       const perks = this.achPerks();
-      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.1 * this.stars) * (1 + perks.price + (perks.priceCat[d.cat] || 0)));
-      return { def: d, mastery: m, cooked, price, learned: !!rec };
+      const markup = this.markupOf(id);
+      const price = Math.round(d.price * (1 + 0.08 * (m - 1)) * (1 + 0.1 * this.stars) * (1 + perks.price + (perks.priceCat[d.cat] || 0)) * (1 + markup / 100));
+      return { def: d, mastery: m, cooked, price, learned: !!rec, markup };
     }
 
     cookTime(dishId, stoveSpeed, skill) {
@@ -298,7 +299,7 @@
       // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）；有分店時，品牌聲譽（各店風評的平均）也算一半
       const rep = Math.max(0.3, 1 + REP.arrivalEffect * this.effectiveRep());
       const away = this.headless ? D.BRANCH.awayFlow : 1; // 玩家不在的店，客流打折
-      return (clamp(base, F.minGap, F.maxGap) * this.rng.range(0.7, 1.3)) / rep / away;
+      return (clamp(base, F.minGap, F.maxGap) * this.rng.range(0.7, 1.3)) / rep / away / this.arrivalMult();
     }
 
     /** 影響客流的風評：單店就是自己的風評；有分店時，自己與品牌聲譽（各店平均）各占一半 */
@@ -865,6 +866,37 @@
       }
     }
 
+    /** 這道菜實際的漲價 %：玩家設定的值，不超過熟練度允許的上限 */
+    markupOf(id) {
+      const rec = this.s.dishes[id];
+      if (!rec) return 0;
+      return Math.min(this.s.markup[id] || 0, D.markupCap(D.masteryLevel(rec.cooked)));
+    }
+
+    /** 上架品項的漲價合計（%）與對應的來客率 */
+    markupTotal() {
+      let n = 0;
+      for (const id of this.s.menu) n += this.markupOf(id);
+      return n;
+    }
+    arrivalMult() {
+      return D.arrivalRate(this.markupTotal());
+    }
+
+    /** 設定某道菜的漲價 %（0＝不漲；上限隨熟練度：2 級 1% … 6 級 5%） */
+    setMarkup(id, pct) {
+      const s = this.s;
+      const rec = s.dishes[id];
+      if (!rec) return this.fail('還沒學會這道菜');
+      pct = Math.round(+pct);
+      const cap = D.markupCap(D.masteryLevel(rec.cooked));
+      if (cap < 1) return this.fail('熟練度 2 級以上才能漲價');
+      if (!(pct >= 0 && pct <= cap)) return this.fail(`這道菜的熟練度最多漲價 ${cap}%`);
+      if (pct) s.markup[id] = pct;
+      else delete s.markup[id];
+      return this.done();
+    }
+
     /** 這間店目前賣得出去的菜：上架、有庫存、而且爐灶煮得動 */
     sellable() {
       const s = this.s;
@@ -876,19 +908,71 @@
       return this.maxStoveTier >= D.stoveTier(D.dishes[id].stove);
     }
 
-    /** 客人點餐：從賣得出去的菜隨機挑一道，庫存 -1；全部賣完回傳 null */
-    pickDish() {
-      const list = this.sellable();
-      if (!list.length) return null;
-      const id = this.rng.pick(list);
+    /** 庫存 -1（賣完時通知一次） */
+    takeStock(id) {
       const s = this.s;
-      if (!this.stockOn) return id;
+      if (!this.stockOn) return;
       s.stock[id]--;
       if (s.stock[id] <= 0 && !this.quiet) {
         this.toast(`「${D.dishes[id].name}」賣完了！`, 'info');
         if (!this.sellable().length) this.toast('所有菜色都賣完了，客人不會上門，等明天 10 點到貨', 'bad');
       }
-      return id;
+    }
+
+    /**
+     * 客人點餐（單人套餐）：多半點一道主餐，菜單上有湯／飲料／小吃／甜點時，有機會再加一道附餐——
+     * 搭配得越好的附餐越常被點；也有少數客人只點一道非主餐。菜單上沒有主餐，就一律單點。
+     * 回傳 { dish, extra }（extra 可能是 null）；全部賣完回傳 null，兩道菜的庫存各 -1。
+     */
+    pickOrder() {
+      const list = this.sellable();
+      if (!list.length) return null;
+      const mains = list.filter((id) => D.dishes[id].kind === 'main');
+      const others = list.filter((id) => D.dishes[id].kind !== 'main');
+      let dish;
+      let extra = null;
+      if (!mains.length) dish = this.rng.pick(others);
+      else if (others.length && this.rng.chance(D.PAIR.single)) dish = this.rng.pick(others);
+      else {
+        dish = this.rng.pick(mains);
+        if (others.length && this.rng.chance(D.PAIR.attach)) {
+          const w = others.map((id) => D.PAIR.levels[D.pairScore(dish, id).score].weight);
+          let r = this.rng.next() * w.reduce((x, y) => x + y, 0);
+          extra = others[others.length - 1];
+          for (let i = 0; i < others.length; i++) {
+            r -= w[i];
+            if (r <= 0) {
+              extra = others[i];
+              break;
+            }
+          }
+        }
+      }
+      this.takeStock(dish);
+      if (extra) this.takeStock(extra);
+      return { dish, extra };
+    }
+
+    /** 這張單的幾道菜、烹飪／用餐時間、需要的爐灶等級 */
+    orderDishes(c) {
+      return c.extra ? [c.dish, c.extra] : [c.dish];
+    }
+    orderCookRaw(c) {
+      const t = this.orderDishes(c).reduce((n, id) => n + D.dishes[id].cook, 0);
+      return c.extra ? t * D.PAIR.cookFactor : t;
+    }
+    orderCookTime(c, stoveSpeed, skill) {
+      const t = this.orderDishes(c).reduce((n, id) => n + this.cookTime(id, stoveSpeed, skill), 0);
+      return c.extra ? t * D.PAIR.cookFactor : t;
+    }
+    orderStoveNeed(c) {
+      return this.orderDishes(c).reduce((n, id) => Math.max(n, D.stoveTier(D.dishes[id].stove)), 0);
+    }
+    /** 這張單的搭配結果：{ score, ...levels[score] }，單點回傳 null */
+    orderPair(c) {
+      if (!c.extra) return null;
+      const sc = D.pairScore(c.dish, c.extra).score;
+      return { score: sc, ...D.PAIR.levels[sc] };
     }
 
     stockTotal() {
@@ -1133,7 +1217,9 @@
         case 'browse':
           c.t -= dt;
           if (c.t <= 0) {
-            c.dish = this.pickDish();
+            const od = this.pickOrder();
+            c.dish = od ? od.dish : null;
+            c.extra = od ? od.extra : null;
             if (!c.dish) {
               // 想點的菜都賣完了：客人掃興離開（不算差評）
               this.s.stats.walkouts++;
@@ -1150,7 +1236,7 @@
         case 'ordering':
           break;
         case 'wait_food':
-          c.p -= dt / ((FOOD_PATIENCE + D.dishes[c.dish].cook * 2) * (1 + D.FLOW.patienceBonus * this.ambience()));
+          c.p -= dt / ((FOOD_PATIENCE + this.orderCookRaw(c) * 2) * (1 + D.FLOW.patienceBonus * this.ambience()));
           break;
         case 'eat':
           c.t -= dt;
@@ -1178,13 +1264,17 @@
 
     /** 吃完了：先坐著、頭上出現金幣符號，等店掌櫃來結帳；結完帳才會起身、座位才釋放。 */
     finishMeal(c) {
-      const info = this.dishInfo(c.dish);
+      const infos = this.orderDishes(c).map((id) => this.dishInfo(id));
+      const pair = this.orderPair(c);
       const mult = c.vip ? 3 : 1;
       const speedBonus = clamp((c.servedP - 0.5) * 2, 0, 1); // 上菜越快小費越多
-      c.bill = info.price * mult;
-      c.tipBase = Math.round(info.price * 0.5 * speedBonus * mult * (1 + D.FLOW.tipBonus * this.ambience()));
+      const base = infos.reduce((n, i) => n + i.price, 0);
+      const price = Math.round(base * (pair ? pair.mult : 1)); // 好搭配加價、地雷搭配打折
+      c.bill = price * mult;
+      c.tipBase = Math.round(price * 0.5 * speedBonus * (pair ? pair.tip : 1) * mult * (1 + D.FLOW.tipBonus * this.ambience()));
+      c.pairScore = pair ? pair.score : null;
       this.s.stats.served++;
-      this.addXp(info.def.xp * mult);
+      this.addXp(infos.reduce((n, i) => n + i.def.xp, 0) * mult);
       c.state = 'wait_pay';
       c.t = 0;
       c.payWait = 0;
@@ -1370,7 +1460,7 @@
       if (this.cleanPlates() < 1) return false; // 沒有乾淨的盤子，要等人洗
       let best = null;
       const c0 = m.job && this.customerById(m.job.cid);
-      const need = c0 && c0.dish ? D.stoveTier(D.dishes[c0.dish].stove) : 0;
+      const need = c0 && c0.dish ? this.orderStoveNeed(c0) : 0;
       for (const st of this.stoves) {
         if (this.stoveBusy.has(st.uid) || st.tier < need) continue; // 爐灶等級要夠煮這道菜
         const r = W.nearestReachable(this.grid, Math.floor(m.x), Math.floor(m.y), st.access);
@@ -1558,7 +1648,7 @@
           if (this.follow(m, spd, dt)) {
             const st = this.stoveByUid.get(m.stove);
             m.state = 'cooking';
-            m.cookTotal = this.cookTime(c.dish, st ? st.speed : 1, this.skillOf(rec));
+            m.cookTotal = this.orderCookTime(c, st ? st.speed : 1, this.skillOf(rec));
             m.t = m.cookTotal;
             if (st) m.dir = this.dirToward(m, st.x + 0.5, st.y + 0.5);
           }
@@ -1566,9 +1656,11 @@
         case 'cooking':
           m.t -= dt;
           if (m.t <= 0) {
-            const dr = this.s.dishes[c.dish];
-            dr.cooked++;
-            if (ACH_AT.has(dr.cooked)) this.checkAchievements();
+            for (const id of this.orderDishes(c)) {
+              const dr = this.s.dishes[id];
+              dr.cooked++;
+              if (ACH_AT.has(dr.cooked)) this.checkAchievements();
+            }
             if (this.stoveBusy.get(m.stove) === m.id) this.stoveBusy.delete(m.stove);
             m.stove = null;
             m.carry = c.dish;
@@ -1598,11 +1690,11 @@
             if (party) party.dined++;
             c.plate = false; // 這個盤子現在算在桌上（party.dined）
             c.servedP = c.p;
-            c.t = D.dishes[c.dish].eat * this.rng.range(0.85, 1.15);
+            c.t = this.orderDishes(c).reduce((n, id) => n + D.dishes[id].eat, 0) * (c.extra ? D.PAIR.eatFactor : 1) * this.rng.range(0.85, 1.15);
             c.eatTotal = c.t;
             c.claimedBy = null;
             this.gainStaffXp(rec);
-            rec.energy = Math.max(0, rec.energy - (4 + D.dishes[c.dish].cook * 0.7));
+            rec.energy = Math.max(0, rec.energy - (4 + this.orderCookRaw(c) * 0.7));
             m.job = null;
             m.carry = null;
             m.state = 'idle';
