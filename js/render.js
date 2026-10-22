@@ -256,6 +256,24 @@
         const e = AT.furniture(it.id, it.rot, face);
         g.drawImage(e.c, x0 + it.x * T, y0 + it.y * T);
       }
+      // 方向箭頭：椅子指向它面對的桌子（旁邊沒有桌子的椅子畫紅色驚嘆號，客人不會坐）；收銀機、冰箱、點唱機指向正面
+      for (const it of game.s.items) {
+        const def = D.furniture[it.id];
+        if (!RC.world.isOriented(def)) continue;
+        const cx = x0 + it.x * T + T / 2;
+        const cy = y0 + it.y * T + T / 2;
+        if (def.cat === 'chair') {
+          const seat = game.seatByChair.get(it.uid);
+          if (seat) AT.arrow(g, cx, cy, seat.face);
+          else {
+            gfx.ellipse(g, '#3b2a20', cx, cy, 4, 4);
+            gfx.ellipse(g, '#e8473a', cx, cy, 3, 3);
+            g.fillStyle = '#fff';
+            g.fillRect(cx, cy - 2, 1, 2);
+            g.fillRect(cx, cy + 1, 1, 1);
+          }
+        } else AT.arrow(g, cx + D.DX[it.rot & 3] * 4, cy + D.DY[it.rot & 3] * 4, it.rot);
+      }
       // 人（遊戲暫停中，只是讓你知道他們站在哪）
       for (const m of game.crew) if (m.onDuty) this.topPerson(g, m.x, m.y, m.rec.look, m.boss ? '#e0b030' : '#f4f2ea');
       for (const c of game.customers) if (c.state !== 'arrive') this.topPerson(g, c.x, c.y, c.look, null);
@@ -599,6 +617,11 @@
         g.globalAlpha = 0.85;
         g.drawImage(e.c, p[0], p[1]);
         g.globalAlpha = 1;
+        if (RC.world.isOriented(def)) {
+          const facing = def.cat === 'chair' ? r2 : rot;
+          const seated = def.cat !== 'chair' || RC.world.itemAt(game.grid, gh.tx + D.DX[r2], gh.ty + D.DY[r2]);
+          if (seated) AT.arrow(g, Math.round(p[0] + T / 2 + (def.cat === 'chair' ? 0 : D.DX[facing] * 4)), Math.round(p[1] + T / 2 + (def.cat === 'chair' ? 0 : D.DY[facing] * 4)), facing);
+        }
         g.fillStyle = gh.ok ? 'rgba(80,230,120,0.4)' : 'rgba(240,70,60,0.5)';
         g.fillRect(p[0], p[1], fp.w * T, fp.h * T);
         this.frame(g, p[0], p[1], fp.w * T, fp.h * T, gh.ok ? '#5fe88a' : '#ff5a4a');

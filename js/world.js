@@ -210,6 +210,50 @@
     return seats;
   }
 
+  /** 家具有「正面」要朝向走道的（收銀機、冰箱、點唱機）：裝潢時自動轉向、上視圖畫箭頭 */
+  const hasFront = (def) => !!(def && def.front);
+  /** 會顯示方向的家具：椅子（面向桌子）與有正面的家具 */
+  const isOriented = (def) => !!(def && (def.cat === 'chair' || def.front));
+
+  /**
+   * 建議的朝向（0 右、1 下、2 左、3 上）：
+   * - 椅子：面向緊鄰的桌子（目前的方向已經面向桌子就不動；兩邊都有桌子，維持玩家選的那一邊）。旁邊沒有桌子就維持原樣。
+   * - 有正面的家具：正面朝向走道（相鄰的空格）；目前的方向就是空格就不動，否則選最靠近房間中央的空格。
+   * 其他家具不需要方向，回傳原本的 rot。uid：移動中的家具自己（不算障礙）。
+   */
+  function suggestRot(g, def, x, y, rot, uid) {
+    rot &= 3;
+    if (def.cat === 'chair') {
+      for (let k = 0; k < 4; k++) {
+        const d = (rot + k) & 3;
+        const o = itemAt(g, x + DX[d], y + DY[d]);
+        if (o && o.uid !== uid && RC.data.furniture[o.id].cat === 'table') return d;
+      }
+      return rot;
+    }
+    if (!hasFront(def)) return rot;
+    const open = (d) => {
+      const nx = x + DX[d];
+      const ny = y + DY[d];
+      if (!inBounds(g, nx, ny)) return false;
+      const o = itemAt(g, nx, ny);
+      return walkable(g, nx, ny) || !!(o && o.uid === uid); // 走得到的空格（移動中的家具原本的位置也算空）
+    };
+    if (open(rot)) return rot;
+    let best = -1;
+    let bestDist = Infinity;
+    for (let k = 1; k < 4; k++) {
+      const d = (rot + k) & 3;
+      if (!open(d)) continue;
+      const dist = Math.hypot(x + DX[d] - (g.w - 1) / 2, y + DY[d] - (g.h - 1) / 2);
+      if (dist < bestDist - 1e-9) {
+        best = d;
+        bestDist = dist;
+      }
+    }
+    return best < 0 ? rot : best;
+  }
+
   /** 找出所有爐灶與可站的位置。 */
   function findStoves(g) {
     const stoves = [];
@@ -273,5 +317,5 @@
     return { x: g.door.x, y: g.door.y };
   }
 
-  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, findStoves, findSinks, nearestWalkable };
+  RC.world = { footprint, buildGrid, inBounds, walkable, itemAt, floodFrom, canPlace, findPath, nearestReachable, findSeats, hasFront, isOriented, suggestRot, findStoves, findSinks, nearestWalkable };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -94,6 +94,19 @@
       const [x, y, sw, sh] = side(f, w, h, 3);
       R(g, '#9aa4ae', x + (f === 0 ? 0 : 3), y + (f === 1 ? 0 : 3), f & 1 ? sw - 6 : sw, f & 1 ? sh : sh - 6);
     },
+    fridge_big: (g, w, h, f) => {
+      box(g, 1, 1, w - 2, h - 2, '#d3dbe1', OUTLINE);
+      const [x, y, sw, sh] = side(f, w, h, 3);
+      R(g, '#7a8894', x + (f === 0 ? 0 : 3), y + (f === 1 ? 0 : 3), f & 1 ? sw - 6 : sw, f & 1 ? sh : sh - 6);
+      if (f & 1) R(g, '#7a8894', 7, 2, 2, h - 4); // 門縫
+      else R(g, '#7a8894', 2, 7, w - 4, 2);
+    },
+    freezer: (g, w, h, f) => {
+      box(g, 1, 1, w - 2, h - 2, '#bcd8ea', OUTLINE);
+      R(g, '#e4f2fa', 3, 3, w - 6, h - 6);
+      const [x, y, sw, sh] = side(f, w, h, 3);
+      R(g, '#3a5a74', x + (f === 0 ? 0 : 3), y + (f === 1 ? 0 : 3), f & 1 ? sw - 6 : sw, f & 1 ? sh : sh - 6);
+    },
     plant_pot: (g, w, h) => {
       disc(g, w / 2, h / 2, 5, '#c26a3a', '#5a2a12');
       disc(g, w / 2, h / 2, 4, '#4f9e45', '#2f6a2a');
@@ -238,5 +251,19 @@
     return r;
   }
 
-  RC.artTop = { T, WALL, furniture, room };
+  /**
+   * 方向箭頭（5×5 像素的小三角形，帶深色外框），畫在 (cx, cy) 為中心、指向 d（0 右、1 下、2 左、3 上）。
+   * 椅子：指向桌子（客人面對的方向）；有正面的家具：指向正面（走道）。
+   */
+  const ARROW = [[0, -2], [0, -1], [0, 0], [0, 1], [0, 2], [1, -1], [1, 0], [1, 1], [2, 0]]; // 指向右的三角形（相對座標）
+  const rotPt = ([x, y], d) => (d === 0 ? [x, y] : d === 1 ? [-y, x] : d === 2 ? [-x, -y] : [y, -x]);
+  function arrow(g, cx, cy, d, fill, edge) {
+    const pts = ARROW.map((p) => rotPt(p, d & 3));
+    g.fillStyle = edge || '#3b2a20';
+    for (const [x, y] of pts) g.fillRect(cx + x - 1, cy + y - 1, 3, 3);
+    g.fillStyle = fill || '#fff4a8';
+    for (const [x, y] of pts) g.fillRect(cx + x, cy + y, 1, 1);
+  }
+
+  RC.artTop = { T, WALL, furniture, room, arrow };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
