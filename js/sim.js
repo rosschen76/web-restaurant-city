@@ -15,6 +15,7 @@
   const TAKE_ORDER_TIME = 0.8;
   const SERVE_TIME = 0.5;
   const REST_BELOW = 15;
+  const JOIN_DIST = 4; // 併桌：兩張桌子最近的座位相距不超過幾格
   const REST_UNTIL = 60;
   const CLEAN_TIME = 1.2; // 收拾一張桌子的時間（秒）
   const PAY_TIME = 0.8; // 店掌櫃電子支付收款的時間（秒）
@@ -670,20 +671,78 @@
       return best;
     }
 
-    /** 依抵達順序，讓有合適空桌的團體入座。 */
+    /**
+     * 沒有任何單張空桌坐得下 3～4 人的組時，把兩張相鄰的空桌併起來用（店裡明明有位置，不讓客人乾等）。
+     * 回傳 {table（主桌）, tables, seats}；挑浪費座位最少、距離最近的一對。
+     */
+    findJoinedTables(size) {
+      const free = [];
+      for (const t of this.tables.values()) {
+        if (this.tableParty.has(t.uid) || this.dirty.has(t.uid)) continue;
+        const seats = t.seats.filter((x) => !this.seatTaken.has(x.uid));
+        if (seats.length) free.push({ table: t, seats });
+      }
+      let best = null;
+      for (let i = 0; i < free.length; i++)
+        for (let j = i + 1; j < free.length; j++) {
+          const a = free[i];
+          const b = free[j];
+          if (a.seats.length + b.seats.length < size) continue;
+          let dist = Infinity;
+          for (const x of a.seats) for (const y of b.seats) dist = Math.min(dist, Math.abs(x.tx - y.tx) + Math.abs(x.ty - y.ty));
+          if (dist > JOIN_DIST) continue;
+          const waste = a.seats.length + b.seats.length - size;
+          if (!best || waste < best.waste || (waste === best.waste && dist < best.dist)) best = { a, b, waste, dist };
+        }
+      if (!best) return null;
+      // 大桌先坐滿，剩下的人坐另一張
+      const [first, second] = best.a.seats.length >= best.b.seats.length ? [best.a, best.b] : [best.b, best.a];
+      return { table: first.table, tables: [first.table, second.table], seats: first.seats.concat(second.seats).slice(0, size) };
+    }
+
+    /**
+     * 這一組要坐哪張桌子（null＝現在沒有合適的）。
+     * 1～2 人優先坐 2 人桌（最小夠坐）；2 人桌都滿了，也不能把大桌（3 人以上）佔光：
+     * 有 3～4 人的組在等的時候，要留足夠的大桌給他們，並且（有兩張以上大桌時）至少保留一張不給小組。
+     */
+    pickTable(party) {
+      const found = this.findTable(party.size);
+      if (!found && party.size >= 3) return this.findJoinedTables(party.size);
+      if (!found || party.size > 2 || found.seats.length < 3) return found;
+      let smallTotal = 0;
+      let largeTotal = 0;
+      let largeFree = 0;
+      for (const t of this.tables.values()) {
+        if (t.seats.length >= 3) {
+          largeTotal++;
+          if (!this.tableParty.has(t.uid) && !this.dirty.has(t.uid)) largeFree++;
+        } else smallTotal++;
+      }
+      if (!smallTotal) return found; // 店裡根本沒有小桌：小組只能坐大桌
+      const bigWaiting = this.queue.filter((p) => p !== party && p.size >= 3).length;
+      const reserve = largeTotal >= 2 ? 1 : 0;
+      return largeFree - bigWaiting > reserve ? found : null;
+    }
+
+    /**
+     * 依抵達順序，讓有合適空桌的團體入座。
+     * 出餐忙不過來（入座控管）擋住前面的組時，後面的組也不能插隊，免得 3～4 人的組一直被小組搶先、等到耐心用完。
+     */
     seatQueue() {
       if (!this.stoves.length) return;
       for (const party of this.queue.slice()) {
-        if (!this.canAdmit(party.size)) continue;
-        const found = this.findTable(party.size);
-        if (found) this.seatParty(party, found.table, found.seats);
+        const found = this.pickTable(party);
+        if (!found) continue; // 沒有合適的桌子：後面人少的組可以先坐其他桌
+        if (!this.canAdmit(party.size)) break;
+        this.seatParty(party, found.table, found.seats, found.tables);
       }
     }
 
-    seatParty(party, table, seats) {
+    seatParty(party, table, seats, tables) {
       const g = this.grid;
       this.queue = this.queue.filter((x) => x !== party);
-      this.tableParty.set(table.uid, party.id);
+      party.tableUids = (tables || [table]).map((t) => t.uid);
+      for (const uid of party.tableUids) this.tableParty.set(uid, party.id);
       party.tableUid = table.uid;
       this.parties.push(party);
       for (let i = 0; i < party.size; i++) {
@@ -1367,9 +1426,16 @@
       this.parties = this.parties.filter((p) => {
         const active = this.customers.some((c) => c.party === p.id && c.state !== 'leave');
         if (!active && this.tableParty.get(p.tableUid) === p.id) {
-          this.tableParty.delete(p.tableUid);
-          const t = this.tables.get(p.tableUid);
-          if (p.dined > 0 && t) this.dirty.set(p.tableUid, { x: t.seats[0].tx, y: t.seats[0].ty, plates: p.dined, claimedBy: null });
+          // 併桌的組：吃過的盤子依座位數分到各張桌子，每張桌子都要收
+          let left = p.dined;
+          const uids = p.tableUids || [p.tableUid];
+          uids.forEach((uid, i) => {
+            if (this.tableParty.get(uid) === p.id) this.tableParty.delete(uid);
+            const t = this.tables.get(uid);
+            const share = i === uids.length - 1 ? left : Math.min(left, p.size > 0 ? Math.ceil(p.dined / uids.length) : left);
+            left -= share;
+            if (share > 0 && t) this.dirty.set(uid, { x: t.seats[0].tx, y: t.seats[0].ty, plates: share, claimedBy: null });
+          });
         }
         return active;
       });

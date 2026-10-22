@@ -1,13 +1,14 @@
 'use strict';
-// 群體客人：不併桌、門外候位、同組一起離席、桌面餐具、離線收益。
+// 群體客人：不同組不共用桌子（3～4 人沒有單張大桌時可併兩張空桌）、門外候位、同組一起離席、桌面餐具、離線收益。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const RC = require('./load.js');
 const D = RC.data;
 
 /** 以指定物件建立遊戲（不含預設擺設）。items: [id,x,y,rot] */
-function mk(items, seed = 1) {
+function mk(items, seed = 1, stage = 0) {
   const s = RC.state.newGame(RC.util.makeRng(seed));
+  s.room.stage = stage;
   s.items = [];
   s.nextUid = 1;
   for (const [id, x, y, rot] of items) s.items.push({ uid: s.nextUid++, id, x, y, rot: rot || 0 });
@@ -207,4 +208,93 @@ test('離線收益上限：超過 8 小時只算 8 小時，且速度夠快', ()
   assert.equal(r.simulated, D.OFFLINE.maxHours * 3600 * D.OFFLINE.efficiency);
   assert.ok(ms < 15000, '快轉花了 ' + ms + 'ms');
   console.log('  離線快轉（8 小時封頂）耗時 ' + ms + 'ms，服務 ' + r.served + ' 位，升到 Lv.' + r.levelTo);
+});
+
+// 兩張相鄰的 2 人桌 + 一張 4 人桌
+const SMALLS_AND_BIG = [
+  STOVE,
+  ['table_wood', 5, 3], ['chair_stool', 4, 3], ['chair_stool', 6, 3, 2],
+  ['table_wood', 5, 5], ['chair_stool', 4, 5], ['chair_stool', 6, 5, 2],
+  ['table_wood', 2, 6], ['chair_stool', 1, 6], ['chair_stool', 3, 6, 2], ['chair_stool', 2, 5, 1], ['chair_stool', 2, 7, 3],
+];
+const sizeOf = (g, uid) => g.tables.get(uid).seats.length;
+
+test('1～2 人優先坐 2 人桌；2 人桌滿了，留最後一張大桌給 3～4 人', () => {
+  const g = mk(SMALLS_AND_BIG);
+  g.canAdmit = () => true;
+  const smallUids = [...g.tables.values()].filter((t) => t.seats.length === 2).map((t) => t.uid);
+  const bigUid = [...g.tables.values()].find((t) => t.seats.length === 4).uid;
+  const a = party(g, 2);
+  g.queue.push(a);
+  g.seatQueue();
+  assert.equal(sizeOf(g, a.tableUid), 2, '2 人先坐 2 人桌');
+  // 2 人桌都被佔了，有一組 4 人正在等：後面的 2 人不能把唯一的大桌搶走
+  for (const uid of smallUids) g.tableParty.set(uid, 999);
+  const quad = party(g, 4);
+  const late = party(g, 2);
+  g.queue.push(quad, late);
+  g.seatQueue();
+  assert.equal(quad.tableUid, bigUid, '4 人坐到大桌');
+  assert.deepEqual(g.queue, [late], '2 人要等，不能併進去');
+});
+
+test('沒有 3～4 人在等時，2 人桌滿了小組可以坐大桌；店裡完全沒有小桌也一樣', () => {
+  const g = mk(SMALLS_AND_BIG);
+  g.canAdmit = () => true;
+  for (const t of g.tables.values()) if (t.seats.length === 2) g.tableParty.set(t.uid, 999);
+  const p = party(g, 2);
+  g.queue.push(p);
+  g.seatQueue();
+  assert.equal(sizeOf(g, p.tableUid), 4);
+  const h = mk([STOVE, ['table_wood', 2, 6], ['chair_stool', 1, 6], ['chair_stool', 3, 6, 2], ['chair_stool', 2, 5, 1], ['chair_stool', 2, 7, 3]]);
+  h.canAdmit = () => true;
+  const q = party(h, 1);
+  h.queue.push(q);
+  h.seatQueue();
+  assert.equal(h.queue.length, 0);
+});
+
+test('大桌都被佔住時，3～4 人可併兩張相鄰空桌，離席後兩張桌都釋出並各自要收', () => {
+  const g = mk(SMALLS_AND_BIG);
+  g.canAdmit = () => true;
+  g.spawnTimer = 1e9;
+  const bigUid = [...g.tables.values()].find((t) => t.seats.length === 4).uid;
+  g.tableParty.set(bigUid, 999);
+  const quad = party(g, 4);
+  g.queue.push(quad);
+  g.seatQueue();
+  assert.equal(g.queue.length, 0, '店裡有位置就不讓 4 人在門外乾等');
+  assert.equal(quad.tableUids.length, 2);
+  for (const uid of quad.tableUids) assert.equal(g.tableParty.get(uid), quad.id);
+  const seats = g.customers.map((c) => c.seat);
+  assert.equal(new Set(seats).size, 4);
+  // 另一組 1 人不能坐到被併的桌
+  const solo = party(g, 1);
+  g.queue.push(solo);
+  g.seatQueue();
+  assert.deepEqual(g.queue, [solo]);
+  quad.dined = 4;
+  for (const c of g.customers) if (c.party === quad.id) c.state = 'leave';
+  g.update(0.1);
+  for (const uid of quad.tableUids) {
+    assert.ok(!g.tableParty.has(uid), '併桌的每一張都要釋出');
+    assert.ok(g.dirty.has(uid), '併桌的每一張都留下餐具');
+  }
+  assert.equal([...g.dirty.values()].reduce((a, d) => a + d.plates, 0), 4, '盤子數守恆');
+});
+
+test('兩張空桌離太遠就不併桌', () => {
+  const g = mk([
+    STOVE,
+    ['table_wood', 3, 5], ['chair_stool', 2, 5], ['chair_stool', 4, 5, 2],
+    ['table_wood', 12, 10], ['chair_stool', 11, 10], ['chair_stool', 13, 10, 2],
+  ], 1, 3);
+  assert.equal(g.tables.size, 2);
+  g.canAdmit = () => true;
+  assert.equal(g.findJoinedTables(3), null);
+  g.maxTableCap = 4;
+  const trio = party(g, 3);
+  g.queue.push(trio);
+  g.seatQueue();
+  assert.deepEqual(g.queue, [trio]);
 });
