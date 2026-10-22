@@ -378,6 +378,17 @@ await scenario('所有家具與菜色都畫得出來：等角圖、上視圖、�
     return out;
   });
   assert.deepEqual(bad, []);
+  // 有正面的家具：等角圖的門／螢幕要跟著方向走（朝右下與朝左下不同；朝左上、右上背對鏡頭看不到正面）
+  const faces = await G(page, () => {
+    const RC = window.RC; const out = {};
+    for (const id of ['fridge', 'fridge_big', 'freezer', 'register', 'jukebox']) out[id] = [0, 1, 2, 3].map((r) => RC.artWorld.furniture(id, r, 'all').c.toDataURL());
+    return out;
+  });
+  for (const [id, u] of Object.entries(faces)) {
+    assert.notEqual(u[0], u[1], id + '：朝右下與朝左下的圖要不同');
+    assert.notEqual(u[0], u[2], id + '：朝向背對鏡頭時看不到正面');
+    assert.notEqual(u[1], u[2], id + '：朝向背對鏡頭時看不到正面');
+  }
   // 實際把每一種家具放進餐廳，等角圖與上視圖各畫一次不出錯
   const errs = [];
   page.on('pageerror', (e) => errs.push(e.message));

@@ -351,15 +351,67 @@
     b.box(0.04, 0.04, 0.96, 0.5, 30, 38, '#c2cad2', { top: '#dfe5ea' });
   } };
 
+  /**
+   * 「有正面」的家具（收銀機、冰箱、點唱機）的畫筆：座標用「正面朝 +v」的本地座標（0～1），
+   * 依 face（0 右下、1 左下、2 左上、3 右上，與上視圖箭頭、data.js 的 DX/DY 一致）轉到實際方向。
+   * 正面朝向左下、右下時看得到（畫門、把手、螢幕）；朝向左上、右上時正面背對鏡頭，只看到背面。
+   */
+  function oriented(b, face) {
+    face &= 3;
+    const m = (lu, lv) => (face === 1 ? [lu, lv] : face === 0 ? [lv, 1 - lu] : face === 2 ? [1 - lv, lu] : [1 - lu, 1 - lv]);
+    const rect = (u0, v0, u1, v1) => {
+      const [a0, c0] = m(u0, v0);
+      const [a1, c1] = m(u1, v1);
+      return [Math.min(a0, a1), Math.min(c0, c1), Math.max(a0, a1), Math.max(c0, c1)];
+    };
+    return {
+      box(u0, v0, u1, v1, z0, z1, col, o) {
+        b.box(...rect(u0, v0, u1, v1), z0, z1, col, o);
+      },
+      flat(u0, v0, u1, v1, z, col) {
+        b.flat(...rect(u0, v0, u1, v1), z, col);
+      },
+      disc(u, v, z, rx, ry, col) {
+        const [x, y] = m(u, v);
+        b.disc(x, y, z, rx, ry, col);
+      },
+      dot(u, v, z, c, w, h) {
+        const [x, y] = m(u, v);
+        b.dot(x, y, z, c, w, h);
+      },
+      /** 正面（本地 v = vf）上的直立面，u0～u1 是沿正面的位置；正面背對鏡頭時不畫 */
+      front(u0, u1, vf, z0, z1, col) {
+        if (face === 1) b.wallU(u0, u1, vf, z0, z1, col);
+        else if (face === 0) b.wallV(1 - u1, 1 - u0, vf, z0, z1, col);
+      },
+      /** 正面上的一個像素點 */
+      frontDot(u, vf, z, c, w, h) {
+        if (face === 1) b.dot(u, vf, z, c, w, h);
+        else if (face === 0) b.dot(vf, 1 - u, z, c, w, h);
+      },
+      /** 側面（本地 u = lu 的那一面）上沿 lv0～lv1 的直立面；只畫看得到的那一側 */
+      side(lv0, lv1, lu, z0, z1, col) {
+        if (face === 1) {
+          if (lu > 0.5) b.wallV(lv0, lv1, lu, z0, z1, col);
+        } else if (face === 0) {
+          if (1 - lu > 0.5) b.wallU(lv0, lv1, 1 - lu, z0, z1, col);
+        } else if (face === 2) {
+          if (lu > 0.5) b.wallU(1 - lv1, 1 - lv0, lu, z0, z1, col);
+        } else if (1 - lu > 0.5) b.wallV(1 - lv1, 1 - lv0, 1 - lu, z0, z1, col);
+      },
+    };
+  }
+
   /* 功能 */
-  DRAW.register = { h: 30, fn(b) {
-    b.box(0.06, 0.06, 0.94, 0.94, 0, 9, '#8a5a32', { top: '#a8723e' });
-    b.box(0.2, 0.22, 0.8, 0.8, 9, 14, '#d8d0b8');
-    b.box(0.28, 0.2, 0.72, 0.4, 14, 22, '#3a3f48');
-    b.dot(0.5, 0.4, 19, '#6fe38a', 5, 1);
-    b.dot(0.5, 0.4, 17, '#6fe38a', 3, 1);
-    for (let i = 0; i < 3; i++) b.dot(0.34 + i * 0.12, 0.7, 14, '#8a7a5a', 2, 1);
-    b.disc(0.82, 0.8, 9, 3, 1, '#e8b83a');
+  DRAW.register = { h: 30, fn(b, info) {
+    const o = oriented(b, info.face);
+    o.box(0.06, 0.06, 0.94, 0.94, 0, 9, '#8a5a32', { top: '#a8723e' });
+    o.box(0.2, 0.22, 0.8, 0.8, 9, 14, '#d8d0b8');
+    o.box(0.28, 0.2, 0.72, 0.4, 14, 22, '#3a3f48'); // 螢幕在櫃檯後面，面向正面
+    o.frontDot(0.5, 0.4, 19, '#6fe38a', 5, 1);
+    o.frontDot(0.5, 0.4, 17, '#6fe38a', 3, 1);
+    for (let i = 0; i < 3; i++) o.dot(0.34 + i * 0.12, 0.7, 14, '#8a7a5a', 2, 1);
+    o.disc(0.82, 0.8, 9, 3, 1, '#e8b83a');
   } };
   DRAW.sink = { h: 30, fn(b) {
     // 不鏽鋼水槽：櫃體 + 凹陷的水盆 + 水龍頭
@@ -374,36 +426,38 @@
     b.box(0.42, 0.1, 0.7, 0.2, 18, 21, '#d3dadf');
     b.box(0.64, 0.12, 0.7, 0.2, 14, 18, '#aab4bb');
   } };
-  DRAW.fridge = { h: 42, fn(b) {
-    b.box(0.1, 0.1, 0.9, 0.9, 0, 34, '#e6edf1', { left: '#cdd8de', right: '#a9b7c0', top: '#f4f8fa' });
-    b.wallU(0.1, 0.9, 0.9, 20, 21, '#8fa0aa');
-    b.wallU(0.74, 0.78, 0.9, 6, 17, '#4a5560');
-    b.wallU(0.74, 0.78, 0.9, 24, 31, '#4a5560');
-    b.dot(0.3, 0.9, 28, '#d94f43', 2, 2);
-    b.dot(0.4, 0.9, 12, '#e8b83a', 2, 2);
+  DRAW.fridge = { h: 42, fn(b, info) {
+    const o = oriented(b, info.face);
+    o.box(0.1, 0.1, 0.9, 0.9, 0, 34, '#e6edf1', { left: '#cdd8de', right: '#a9b7c0', top: '#f4f8fa' });
+    o.front(0.1, 0.9, 0.9, 20, 21, '#8fa0aa');
+    o.front(0.74, 0.78, 0.9, 6, 17, '#4a5560');
+    o.front(0.74, 0.78, 0.9, 24, 31, '#4a5560');
+    o.frontDot(0.3, 0.9, 28, '#d94f43', 2, 2);
+    o.frontDot(0.4, 0.9, 12, '#e8b83a', 2, 2);
   } };
-
   // 雙門冷藏櫃：不鏽鋼色、中間有門縫、兩支門把
-  DRAW.fridge_big = { h: 46, fn(b) {
-    b.box(0.08, 0.08, 0.92, 0.92, 0, 40, '#cfd7dd', { left: '#b4bfc7', right: '#909da7', top: '#e6ecf0' });
-    b.wallU(0.08, 0.92, 0.92, 24, 25, '#74828d');
-    b.wallU(0.49, 0.51, 0.92, 2, 38, '#74828d');
-    b.wallU(0.4, 0.44, 0.92, 8, 20, '#3f4954');
-    b.wallU(0.56, 0.6, 0.92, 8, 20, '#3f4954');
-    b.wallU(0.4, 0.44, 0.92, 28, 36, '#3f4954');
-    b.wallU(0.56, 0.6, 0.92, 28, 36, '#3f4954');
-    b.dot(0.2, 0.92, 33, '#4ab0e8', 2, 2);
-    b.dot(0.3, 0.92, 33, '#e8b83a', 2, 2);
+  DRAW.fridge_big = { h: 46, fn(b, info) {
+    const o = oriented(b, info.face);
+    o.box(0.08, 0.08, 0.92, 0.92, 0, 40, '#cfd7dd', { left: '#b4bfc7', right: '#909da7', top: '#e6ecf0' });
+    o.front(0.08, 0.92, 0.92, 24, 25, '#74828d');
+    o.front(0.49, 0.51, 0.92, 2, 38, '#74828d');
+    o.front(0.4, 0.44, 0.92, 8, 20, '#3f4954');
+    o.front(0.56, 0.6, 0.92, 8, 20, '#3f4954');
+    o.front(0.4, 0.44, 0.92, 28, 36, '#3f4954');
+    o.front(0.56, 0.6, 0.92, 28, 36, '#3f4954');
+    o.frontDot(0.2, 0.92, 33, '#4ab0e8', 2, 2);
+    o.frontDot(0.3, 0.92, 33, '#e8b83a', 2, 2);
   } };
   // 專業冷凍庫：偏藍的厚門，單支長把手與結霜的頂蓋
-  DRAW.freezer = { h: 50, fn(b) {
-    b.box(0.06, 0.06, 0.94, 0.94, 0, 44, '#bcd8ea', { left: '#9bbdd4', right: '#7098b4', top: '#e4f2fa' });
-    b.wallU(0.06, 0.94, 0.94, 40, 42, '#5f8aa6');
-    b.wallU(0.82, 0.88, 0.94, 6, 34, '#2f4252');
-    b.wallU(0.1, 0.78, 0.94, 3, 5, '#7098b4');
-    b.dot(0.2, 0.94, 36, '#ffffff', 3, 2);
-    b.dot(0.45, 0.94, 36, '#4ab0e8', 2, 2);
-    b.dot(0.6, 0.94, 36, '#d94f43', 2, 2);
+  DRAW.freezer = { h: 50, fn(b, info) {
+    const o = oriented(b, info.face);
+    o.box(0.06, 0.06, 0.94, 0.94, 0, 44, '#bcd8ea', { left: '#9bbdd4', right: '#7098b4', top: '#e4f2fa' });
+    o.front(0.06, 0.94, 0.94, 40, 42, '#5f8aa6');
+    o.front(0.82, 0.88, 0.94, 6, 34, '#2f4252');
+    o.front(0.1, 0.78, 0.94, 3, 5, '#7098b4');
+    o.frontDot(0.2, 0.94, 36, '#ffffff', 3, 2);
+    o.frontDot(0.45, 0.94, 36, '#4ab0e8', 2, 2);
+    o.frontDot(0.6, 0.94, 36, '#d94f43', 2, 2);
   } };
 
   /* 裝飾 */
@@ -499,17 +553,19 @@
     b.dot(0.2, 0.85, 24, '#e8fbff', 1, 1);
     b.box(0.08, 0.13, 0.92, 0.87, 27, 29, '#2f3b46');
   } };
-  DRAW.jukebox = { h: 46, fn(b) {
-    b.box(0.12, 0.15, 0.88, 0.85, 0, 28, '#8a2f3a', { left: '#a83a46', right: '#6a232c', top: '#c4505c' });
-    b.wallU(0.2, 0.8, 0.85, 8, 25, '#ffcf5a');
-    b.wallU(0.2, 0.8, 0.85, 8, 12, '#ff8a3a');
-    b.wallU(0.2, 0.8, 0.85, 12, 16, '#ff5a4a');
-    b.wallU(0.26, 0.74, 0.85, 17, 24, '#ffe9a0');
-    b.dot(0.5, 0.85, 20, '#8a2f3a', 4, 4);
-    b.dot(0.5, 0.85, 21, '#ffe9a0', 2, 2);
-    for (let i = 0; i < 4; i++) b.dot(0.28 + i * 0.14, 0.85, 4, '#e8e0c8', 2, 2);
-    b.disc(0.5, 0.5, 28, 9, 4, '#c4505c');
-    b.wallV(0.2, 0.8, 0.88, 6, 24, '#6fe3d8');
+  DRAW.jukebox = { h: 46, fn(b, info) {
+    const o = oriented(b, info.face);
+    o.box(0.12, 0.15, 0.88, 0.85, 0, 28, '#8a2f3a', { left: '#a83a46', right: '#6a232c', top: '#c4505c' });
+    o.front(0.2, 0.8, 0.85, 8, 25, '#ffcf5a');
+    o.front(0.2, 0.8, 0.85, 8, 12, '#ff8a3a');
+    o.front(0.2, 0.8, 0.85, 12, 16, '#ff5a4a');
+    o.front(0.26, 0.74, 0.85, 17, 24, '#ffe9a0');
+    o.frontDot(0.5, 0.85, 20, '#8a2f3a', 4, 4);
+    o.frontDot(0.5, 0.85, 21, '#ffe9a0', 2, 2);
+    for (let i = 0; i < 4; i++) o.frontDot(0.28 + i * 0.14, 0.85, 4, '#e8e0c8', 2, 2);
+    o.disc(0.5, 0.5, 28, 9, 4, '#c4505c');
+    o.side(0.2, 0.8, 0.88, 6, 24, '#6fe3d8'); // 兩側的霓虹燈條，只畫看得到的那一側
+    o.side(0.2, 0.8, 0.12, 6, 24, '#6fe3d8');
   } };
   DRAW.statue = { h: 52, fn(b) {
     b.box(0.12, 0.12, 0.88, 0.88, 0, 9, '#a2a2aa', { top: '#c2c2ca' });
@@ -558,7 +614,7 @@
     const c = canvas((fp.w + fp.h) * 16 + pad * 2, (fp.w + fp.h) * 8 + H + pad * 2);
     const ax = fp.h * 16 + pad;
     const ay = H + pad;
-    const swap = !!(rr & 1) && !isChair;
+    const swap = !!(rr & 1) && !isChair && !def.front; // 有正面的家具不鏡射，方向由 info.face 決定
     const b = brush(ctx(c), ax, ay, swap);
     dr.fn(b, { rot: rr, face: rr, part: part || 'all', fw: fp.w, fh: fp.h });
     outline(c);
