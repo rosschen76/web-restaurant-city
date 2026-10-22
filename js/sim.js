@@ -815,6 +815,33 @@
     }
 
     /**
+     * 門外有人候位時，說明第一組還沒入座的原因（沒人候位回傳 null）：
+     * admit 出餐忙不過來（入座控管）、dirty 空桌上的餐具還沒收、full 所有桌子都有人坐、
+     * small 沒有夠大的桌子、reserved 替 3～4 人的組保留大桌。
+     */
+    queueReason() {
+      for (const party of this.queue) {
+        const found = this.pickTable(party);
+        if (found) {
+          if (!this.canAdmit(party.size)) {
+            const staff = this.crew.filter((m) => m.onDuty).length;
+            return { code: 'admit', size: party.size, staff, cap: Math.max(D.FLOW.admitMin, Math.ceil(staff * D.FLOW.admitPerStaff)), pending: this.pendingGuests() };
+          }
+          continue; // 這組馬上就能入座，看下一組
+        }
+        const tables = [...this.tables.values()];
+        const idle = (t) => !this.tableParty.has(t.uid);
+        const dirty = tables.filter((t) => idle(t) && this.dirty.has(t.uid)).length;
+        const fitFree = tables.filter((t) => idle(t) && !this.dirty.has(t.uid) && t.seats.length >= party.size).length;
+        if (!tables.some((t) => t.seats.length >= party.size) && !this.findJoinedTables(party.size)) return { code: 'small', size: party.size, max: this.maxTableCap };
+        if (fitFree > 0) return { code: 'reserved', size: party.size };
+        if (dirty > 0) return { code: 'dirty', size: party.size, dirty, staff: this.crew.filter((m) => m.onDuty).length };
+        return { code: 'full', size: party.size };
+      }
+      return null;
+    }
+
+    /**
      * 依抵達順序，讓有合適空桌的團體入座。
      * 出餐忙不過來（入座控管）擋住前面的組時，後面的組也不能插隊，免得 3～4 人的組一直被小組搶先、等到耐心用完。
      */

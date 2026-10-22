@@ -546,6 +546,30 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
   assert.ok(before - after >= wage + welfare - 5 && before - after <= wage + welfare + 5, `應扣一天日薪 ${wage} 與福利金 ${welfare}：${before} → ${after}`);
 });
 
+await scenario('門外候位時，提示說明還沒入座的原因（出餐忙不過來／餐具沒收／桌子全滿）；暫停時也看得到', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  const txt = (sel) => page.locator(sel).innerText();
+  await G(page, () => {
+    const g = window.__game.game;
+    g.spawnTimer = 1e9; // 只觀察手動放進去的候位組
+    const mkParty = (n) => ({ id: g.nextPid++, size: n, looks: Array.from({ length: n }, () => window.RC.state.makeLook(g.rng)), vip: false, vipTitle: null, p: 1, tableUid: null, dined: 0 });
+    g.queue = [mkParty(2), mkParty(1)];
+    g.canAdmit = () => false; // 出餐忙不過來
+    window.__game.ui.updateWarn();
+  });
+  assert.ok((await txt('#warn')).includes('出餐忙不過來'), await txt('#warn'));
+  assert.ok((await txt('#warn')).includes('還有空位'));
+  // 暫停時仍顯示（往下移，不和「已暫停」橫幅重疊）
+  await G(page, () => { const g = window.__game.game; g.setPause('user', true); window.__game.ui.updateWarn(); });
+  assert.equal(await page.locator('#warn').isVisible(), true, '暫停時看得到候位原因');
+  // 桌子全滿
+  await G(page, () => { const g = window.__game.game; delete g.canAdmit; for (const t of g.tables.values()) g.tableParty.set(t.uid, 999); window.__game.ui.updateWarn(); });
+  assert.ok((await txt('#warn')).includes('所有桌子都有人坐'), await txt('#warn'));
+  // 空桌上的餐具還沒收
+  await G(page, () => { const g = window.__game.game; g.tableParty.clear(); for (const t of g.tables.values()) g.dirty.set(t.uid, { x: 0, y: 0, plates: 1, claimedBy: null }); window.__game.ui.updateWarn(); });
+  assert.ok((await txt('#warn')).includes('餐具還沒收'), await txt('#warn'));
+});
+
 await scenario('左上角資訊框寬度固定：風評 +9.9 → +10.0、營業狀態與尖峰字樣改變時不會忽寬忽窄', async (page) => {
   await page.click('[data-act=welcome-ok]');
   const widths = [];

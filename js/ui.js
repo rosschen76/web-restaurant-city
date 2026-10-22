@@ -235,9 +235,30 @@
       set(this.el.navStaff, hireable, '+');
     }
 
+    /** 門外有人候位：說明為什麼還沒入座（有空位也可能因為出餐忙不過來而在外面等） */
+    queueMsg(g) {
+      const n = g.queuePeople();
+      const r = g.queueReason();
+      const head = `門外有 ${n} 人在候位`;
+      if (!r) return head + '。';
+      switch (r.code) {
+        case 'admit':
+          return `${head}，店裡還有空位，但出餐忙不過來：在班員工 ${r.staff} 位，同時最多照顧 ${r.cap} 位客人（目前 ${r.pending} 位在等點餐或上菜）。這個時段多排幾位員工（員工 → 排班），候位的客人才進得來。`;
+        case 'dirty':
+          return `${head}：${r.dirty} 張空桌上的餐具還沒收，在班員工 ${r.staff} 位忙不過來。多排幾位員工，或多雇人幫忙收桌子。`;
+        case 'reserved':
+          return `${head}：2 人桌都有人坐，剩下的大桌留給 3～4 人的組；多放幾張 2 人桌可以讓 1～2 人的客人更快入座。`;
+        case 'small':
+          return `${head}：沒有夠大的桌子坐 ${r.size} 人（最大的桌子 ${r.max} 人座）。`;
+        default:
+          return `${head}：所有桌子都有人坐了，增加桌椅（或更大的桌子）可以讓更多人入座。`;
+      }
+    }
+
     updateWarn() {
       const g = this.game;
       let msg = '';
+      let isQueue = false; // 候位原因暫停時也要看得到（玩家常常暫停來查看）
       if (g.isOver()) msg = '餐廳已經倒閉了。到「設定 → 存檔」重新開始。';
       else if (g.s.company.chainDays > 0) msg = `所有分店的風評都低於 ${D.BRANCH.chainRep}，已連續 ${g.s.company.chainDays} 天，滿 ${D.BRANCH.chainDays} 天公司就倒閉了！`;
       else if (g.isGM() && !g.s.staff.some((m) => g.canCollect(m))) msg = '這間店沒有人能結帳（要有 Lv.10 的正店長）！到「員工」任命店長。';
@@ -248,14 +269,18 @@
       else if (g.stockOn && g.s.menu.length && !g.sellable().length) msg = g.s.menu.some((id) => g.cookable(id)) ? `菜都賣完了，客人不會上門！每天 ${D.STOCK.deliveryHour}:00 到貨，到「菜單 → 進貨」調整進貨量。` : '菜單上的菜，爐灶都煮不動！到「商店」升級爐灶，或到「菜單」換上煮得動的菜。';
       else if (!g.seats.length) msg = '沒有座位！椅子必須緊鄰桌子，客人才會入座。';
       else if (g.crew.filter((m) => m.state === 'wait_stove').length >= 1 && g.stoves.length < g.crew.length) msg = '爐灶不夠，員工在排隊等爐灶，多買一座吧。';
-      else if (g.queuePeople() >= 4) msg = `門外有 ${g.queuePeople()} 人在候位：增加桌椅（或更大的桌子）可以讓更多人入座。`;
+      else if (g.queuePeople() >= 2) {
+        msg = this.queueMsg(g);
+        isQueue = true;
+      }
       else if (g.s.lowDays >= 5) msg = `風評已連續 ${g.s.lowDays} 天跌到谷底，滿 ${D.REPUTATION.loseDays} 天餐廳就要倒閉了！`;
       else if (g.dirty.size >= 3) msg = '桌上的餐具堆積了，雇用更多員工幫忙收桌子吧。';
       else if (g.customers.filter((c) => c.state === 'wait_pay').length >= 3) msg = '好幾位客人等著結帳，掌櫃忙不過來：多雇員工分擔煮菜上菜，讓掌櫃專心收款（也可以買收銀機）。';
       const el = this.el.warn;
-      if (this.game.paused) {
+      if (this.game.paused && !isQueue) {
         el.hidden = true;
       } else if (msg) {
+        el.classList.toggle('below-pause', !!this.game.paused); // 暫停時上面有「已暫停」的橫幅，候位原因往下移
         this.setText(el, '⚠ ' + msg);
         el.hidden = false;
       } else el.hidden = true;
