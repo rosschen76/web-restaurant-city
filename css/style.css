@@ -264,6 +264,6 @@ select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: va
 .pair-row { margin: 4px 3px; padding: 5px 8px; }
 
 /* 時鐘列固定寬度：風評從 +9.9 變 +10.0、營業狀態或尖峰字樣改變時，左上角的框不會跟著忽寬忽窄 */
-.clockline { white-space: nowrap; min-width: 20.5em; }
+.clockline { white-space: nowrap; min-width: 21.5em; }
 .clockline .doom { display: block; }
 @media (max-width: 560px) { .clockline { white-space: normal; min-width: 0; } }

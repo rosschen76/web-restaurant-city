@@ -462,7 +462,7 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
 await scenario('左上角資訊框寬度固定：風評 +9.9 → +10.0、營業狀態與尖峰字樣改變時不會忽寬忽窄', async (page) => {
   await page.click('[data-act=welcome-ok]');
   const widths = [];
-  for (const [rep, day, clock, low] of [[9.9, 83, 21.4 * 60, 0], [10, 83, 21.4 * 60, 0], [-10, 83, 21.4 * 60, 0], [10, 1, 9 * 60, 0], [-10, 999, 12.5 * 60, 15], [3.5, 5, 14 * 60, 0]]) {
+  for (const [rep, day, clock, low] of [[9.9, 83, 21.4 * 60, 0], [10, 83, 21.4 * 60, 0], [-10, 83, 21.4 * 60, 0], [10, 1, 9 * 60, 0], [-10, 999, 12.5 * 60, 15], [-10, 9999, 12.5 * 60, 15], [3.5, 5, 14 * 60, 0]]) {
     widths.push(await G(page, ([rep, day, clock, low]) => {
       const g = window.__game.game; g.s.reputation = rep; g.s.day = day; g.s.clock = clock; g.s.lowDays = low;
       window.__game.ui.updateClock();
