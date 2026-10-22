@@ -139,3 +139,21 @@ test('環境加成：魅力越高，客人越有耐心、小費越多', () => {
   assert.ok(tip(hi) > tip(lo));
   assert.equal(tip(hi), Math.round(tip(lo) * (1 + D.FLOW.tipBonus)));
 });
+
+test('客流對齊同時在班的人手：營業時間比一班（8 小時）長，客人上門的間隔等比例拉長；不超過一班就不受影響', () => {
+  const gap = (open, close, dayMode = true) => {
+    const g = mk(3, { dayMode }, (s) => (s.level = 20));
+    g.appeal = 0;
+    if (dayMode) g.setBusinessHours(open, close);
+    let n = 0;
+    for (let i = 0; i < 600; i++) n += g.spawnInterval();
+    return n / 600;
+  };
+  const eight = gap(9, 17);
+  const seven = gap(10, 17);
+  const thirteen = gap(8, 21);
+  assert.ok(Math.abs(seven / eight - 1) < 0.1, '營業 7 小時與 8 小時一樣（不超過一班）');
+  assert.ok(Math.abs(thirteen / eight - 13 / 8) < 0.15, `營業 13 小時，間隔約 13/8 倍：${(thirteen / eight).toFixed(2)}`);
+  assert.ok(Math.abs(gap(0, 24) / eight - 3) < 0.3);
+  assert.ok(gap(0, 0, false) > 0, '不分日夜的測試模式不套用');
+});

@@ -293,7 +293,10 @@
       const F = D.FLOW;
       const lv = this.s.level;
       const labor = clamp(F.laborBase + F.laborPerLevel * (lv - 1), F.laborBase, F.laborMax);
-      const people = D.maxStaffForLevel(lv) + 1; // 含店掌櫃
+      // 客流對齊「同一時間能上班的人手」：員工一班只有 shiftHours 小時，營業時間比一班長的話，同時在班的只有一部分，
+      // 客人上門的速度要跟著放慢，不然人手永遠不夠、門外永遠排著一堆人（營業時間不超過一班就不受影響）
+      const duty = this.dayMode ? Math.min(1, DAYC.shiftHours / Math.max(1, this.s.schedule.close - this.s.schedule.open)) : 1;
+      const people = (D.maxStaffForLevel(lv) + 1) * duty; // 含店掌櫃
       const appeal = F.appealMin + F.appealSpan * Math.min(1, this.appeal / F.appealFull);
       const base = labor / people / F.load / appeal;
       // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）；有分店時，品牌聲譽（各店風評的平均）也算一半
@@ -825,7 +828,7 @@
         if (found) {
           if (!this.canAdmit(party.size)) {
             const staff = this.crew.filter((m) => m.onDuty).length;
-            return { code: 'admit', size: party.size, staff, cap: Math.max(D.FLOW.admitMin, Math.ceil(staff * D.FLOW.admitPerStaff)), pending: this.pendingGuests() };
+            return { code: 'admit', size: party.size, staff, total: this.s.staff.length, cap: Math.max(D.FLOW.admitMin, Math.ceil(staff * D.FLOW.admitPerStaff)), pending: this.pendingGuests() };
           }
           continue; // 這組馬上就能入座，看下一組
         }
@@ -2268,10 +2271,11 @@
     }
 
     /**
-     * 自動排班：
-     * 1. 先蓋滿營業時間：掌櫃排開店班、值班店長（沒有就等級最高的員工）排收店班，兩人都能結帳；
-     * 2. 多出來的員工中，**等級高的（資深）優先去補尖峰**（客流高、已經排的人少的時段）；
-     * 3. **等級低的（資淺）分成 2～3 個時段**錯開上班，不全部擠在同一個鐘點。
+     * 自動排班：讓各鐘點的在班人數**依客流（DEMAND）的比例**分配，不要有時段人手不足、別的時段人擠人：
+     * 1. 先蓋滿營業時間：掌櫃／正店長排開店班、副店長排收店班（都能結帳）；
+     * 2. 其餘員工一位一位排：每位挑「最缺人」的起點——每個鐘點的需求 ÷（已經排了幾個人 + 1），加總最高的那個起點
+     *    （這樣人數會自然長成和客流成正比，早上、午後也有人，不會全部擠到午餐尖峰的起點）；
+     * 3. 等級高的（資深）對尖峰時段的需求再加權，優先去補尖峰；等級低的（資淺）只看一般的需求，分散到其他時段。
      */
     autoSchedule() {
       const s = this.s;
@@ -2295,26 +2299,22 @@
         for (let j = 0; j < SH; j++) count[(st + j) % 24]++;
       };
       const lastStart = Math.max(open, close - SH);
-      /** 這個起點能補多少「還缺人的需求」：尖峰時段權重高 */
-      const need = (st, peakOnly) => {
+      /** 這個起點能補多少「還缺人的需求」；資深員工對尖峰時段的需求加權 */
+      const need = (st, senior) => {
         let score = 0;
         for (const h of hoursOf(st)) {
           const peak = D.demandKind(D.DEMAND[h]) === 'peak';
-          if (peakOnly && !peak) continue;
-          score += (peak ? D.DEMAND[h] : D.DEMAND[h] * 0.25) / (1 + count[h]);
+          score += (D.DEMAND[h] * (senior && peak ? 1.3 : 1)) / (1 + count[h]);
         }
         return score;
       };
-      // 資淺員工可選的 2～3 個起點：把可排的區間等分
-      const span = lastStart - open;
-      const n = span >= 6 ? 3 : span >= 2 ? 2 : 1;
-      const juniorStarts = [];
-      for (let j = 0; j < n; j++) juniorStarts.push(n === 1 ? open : Math.round(open + (j * span) / (n - 1)));
-      const best = (cands, peakOnly) => {
-        let pick = cands[0];
+      const allStarts = [];
+      for (let st = open; st <= lastStart; st++) allStarts.push(st);
+      const best = (senior) => {
+        let pick = allStarts[0];
         let top = -1;
-        for (const st of cands) {
-          const sc = need(st, peakOnly);
+        for (const st of allStarts) {
+          const sc = need(st, senior);
           if (sc > top + 1e-9) {
             top = sc;
             pick = st;
@@ -2322,23 +2322,8 @@
         }
         return pick;
       };
-      const usedJunior = new Set(); // 資淺員工輪流用掉每個時段，才不會全擠在同一個
-      const allStarts = [];
-      for (let st = open; st <= lastStart; st++) allStarts.push(st);
       people.forEach((rec, i) => {
-        let st;
-        if (i < k) st = slots[slotOrder[i]]; // 先排滿營業時間
-        else if (rec.level >= DAYC.seniorLevel) st = best(allStarts, true); // 資深：補尖峰
-        else {
-          // 資淺：分成 2～3 個時段，每個時段都用過一輪才重複
-          let cands = juniorStarts.filter((x) => !usedJunior.has(x));
-          if (!cands.length) {
-            usedJunior.clear();
-            cands = juniorStarts;
-          }
-          st = best(cands, false);
-          usedJunior.add(st);
-        }
+        const st = i < k ? slots[slotOrder[i]] : best(rec.level >= DAYC.seniorLevel); // 先排滿營業時間，其餘補最缺人的時段
         rec.shift = ((st % 24) + 24) % 24;
         cover(rec.shift);
       });

@@ -318,6 +318,7 @@ test('候位原因 admit：店裡有空位，但在等點餐／上菜的客人�
   assert.equal(r.cap, cap);
   assert.equal(r.pending, cap);
   assert.ok(r.staff >= 1);
+  assert.equal(r.total, g.s.staff.length);
   assert.ok(g.seats.filter((s) => !g.seatTaken.has(s.uid)).length > 0, '確實還有空位');
 });
 
