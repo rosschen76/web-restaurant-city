@@ -65,7 +65,7 @@
    * 每間店只有自己的欄位（格局、員工、風評…）。店面物件用存取器把共用欄位接到公司層，
    * 所以 s.coins、s.level 這些既有寫法完全不用改；JSON.stringify(店面) 仍會得到「單店的平面存檔」。 */
   const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'ach', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
-  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'menu', 'order', 'stock', 'stockDay', 'markup', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
+  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'menu', 'order', 'stock', 'stockDay', 'markup', 'autoStock', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
 
   /** 把店面接上公司：共用欄位改成存取器（寫入公司層）。 */
   function attach(st, co) {
@@ -146,6 +146,7 @@
       stock: {},
       stockDay: 0,
       markup: {},
+      autoStock: false,
       over: null,
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       sinkDirty: 0,
@@ -191,6 +192,7 @@
       stock: { danbing: D.STOCK.startQty }, // 目前庫存（份）
       stockDay: 0, // 最近一次到貨是第幾天
       markup: {}, // 單品漲價 %（實際上限隨熟練度）
+      autoStock: false, // 自動補貨：每天把倉庫補到上限
       staff: [newStaff(1, first)],
       nextStaffId: 2,
       candidates: [],
@@ -359,6 +361,7 @@
     };
     dst.order = clean(raw.order, D.STOCK.orderMax);
     dst.stock = clean(raw.stock, 1e6);
+    for (const id of Object.keys(dst.stock)) if (!dst.menu.includes(id)) delete dst.stock[id]; // 沒上架的菜不留庫存（下架就報廢）
     dst.stockDay = Math.floor(num(raw.stockDay, 0, 0, 1e6));
     const mk = {};
     for (const [id, n] of Object.entries(raw.markup && typeof raw.markup === 'object' ? raw.markup : {})) if (learned[id] && D.dishes[id]) {
@@ -366,6 +369,7 @@
       if (v > 0) mk[id] = v;
     }
     dst.markup = mk;
+    dst.autoStock = raw.autoStock === true;
   }
   function cleanAch(raw) {
     const out = {};
