@@ -336,6 +336,32 @@ await scenario('編輯模式：選取、旋轉、收起、倉庫放回；存檔�
   assert.equal(await page.locator('[data-act=welcome-ok]').count(), 0, '重載後不應再顯示歡迎視窗');
 });
 
+await scenario('裝潢模式是上視圖：格子為正方形、點格子選到家具、可以拖曳到另一格；離開後回到等角視角', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  assert.equal(await G(page, () => window.__game.view.top), false, '平常是等角視角');
+  await page.click('.bottom-bar [data-act=toggle-edit]');
+  assert.equal(await G(page, () => window.__game.view.top), true, '裝潢模式是上視圖');
+  // 上視圖：相鄰格在水平／垂直方向各差一個格寬，沒有斜向位移
+  const geo = await G(page, () => { const v = window.__game.view; const a = v.proj(2, 2); const b = v.proj(3, 2); const c = v.proj(2, 3); return [b[0] - a[0], b[1] - a[1], c[0] - a[0], c[1] - a[1]]; });
+  assert.deepEqual(geo, [16, 0, 0, 16]);
+  // 點擊格子 → 反推回同一格
+  const tile = await G(page, () => { const v = window.__game.view; const p = v.tileToCss(6.5, 3.5); return v.tileAt(p.x, p.y); });
+  assert.deepEqual(tile, { x: 6, y: 3 });
+  // 選取起始的盆栽（7,0）後拖到空格 (7,1)
+  const from = await G(page, () => window.__game.view.tileToCss(7.5, 0.5));
+  const to = await G(page, () => window.__game.view.tileToCss(7.5, 1.5));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 4 });
+  await page.mouse.move(to.x, to.y, { steps: 4 });
+  await page.mouse.up();
+  const moved = await G(page, () => window.__game.game.s.items.find((i) => i.id === 'plant_pot'));
+  assert.deepEqual([moved.x, moved.y], [7, 1], '拖曳後盆栽移到新的格子');
+  await page.click('.edit-bar [data-act=toggle-edit]');
+  assert.equal(await G(page, () => window.__game.view.top), false, '離開後恢復等角視角');
+  assert.equal(await G(page, () => window.__game.view.edit), false);
+});
+
 await scenario('以 3 倍速連續模擬 20 分鐘不出錯，等級成長', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => {
@@ -429,6 +455,19 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
   await page.waitForFunction(() => window.__game.game.s.day >= 2, null, { timeout: 8000 });
   const after = await G(page, () => window.__game.game.s.coins);
   assert.ok(before - after >= wage - 5 && before - after <= wage + 5, `應扣一天日薪 ${wage}：${before} → ${after}`);
+});
+
+await scenario('客流尖峰／離峰：HUD 顯示時段，排班頁有客流圖與尖峰時段', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { window.__game.game.s.clock = 12.5 * 60; });
+  await page.waitForFunction(() => document.querySelector('#clock').textContent.includes('尖峰'), null, { timeout: 4000 });
+  await G(page, () => { window.__game.game.s.clock = 15.5 * 60; });
+  await page.waitForFunction(() => document.querySelector('#clock').textContent.includes('離峰'), null, { timeout: 4000 });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  await page.click('[data-tab=sched]');
+  const txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('客人上門的頻率') && txt.includes('尖峰時段：12:00–14:00、18:00–20:00'), txt);
+  assert.equal(await page.locator('.h24 i[title*="客流"]').count(), 24);
 });
 
 await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {

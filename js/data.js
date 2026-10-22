@@ -187,6 +187,24 @@
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
   const GAME_VERSION = { current: 3, maxGap: 2 };
 
+  /* ───────── 客流：尖峰與離峰 ───────── */
+  // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
+  const DEMAND = [0.1, 0.1, 0.1, 0.1, 0.1, 0.15, 0.25, 0.4, 0.6, 0.5, 0.5, 0.9, 1.5, 1.4, 0.7, 0.4, 0.4, 0.8, 1.5, 1.4, 1.0, 0.5, 0.3, 0.15];
+  const PEAK_AT = 1.2; // 倍率達到這個值算「尖峰」
+  const PEAK_PATIENCE = 1.4; // 尖峰時客人有心理準備要排隊，候位耐心延長
+  const PEAK_REP_SHARE = 0.5; // 尖峰客滿而走掉的客人，風評扣分只算一半
+  const OFFPEAK_AT = 0.55; // 倍率低於這個值算「離峰」
+  /** 某個鐘點（可含小數，0~24）的客流倍率 */
+  function demandAt(hour) {
+    const h = ((hour % 24) + 24) % 24;
+    const i = Math.floor(h);
+    const f = h - i;
+    return DEMAND[i] * (1 - f) + DEMAND[(i + 1) % 24] * f;
+  }
+  /** 'peak' 尖峰 | 'normal' 一般 | 'off' 離峰 */
+  const demandKind = (v) => (v >= PEAK_AT ? 'peak' : v < OFFPEAK_AT ? 'off' : 'normal');
+  const DEMAND_NAMES = { peak: '尖峰', normal: '一般', off: '離峰' };
+
   /* ───────── 風評 ───────── */
   // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
   // 風評一直停在谷底（-10）連續 15 天，餐廳就倒閉、遊戲終止。
@@ -238,6 +256,6 @@
     maxStaffForLevel, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
