@@ -225,6 +225,9 @@ textarea { min-height: 80px; resize: vertical; font-size: 12px; }
 .clockline .peak { color: var(--brand-d); font-weight: bold; }
 .tag.blue { background: var(--blue-d); }
 select { font: inherit; padding: 3px 4px; border: 0; background: #fff; color: var(--ink); box-shadow: 0 -2px 0 var(--ink), 0 2px 0 var(--ink), -2px 0 0 var(--ink), 2px 0 0 var(--ink); margin: 2px 3px; }
+.raise-row { display: flex; align-items: center; gap: 8px; max-width: 260px; }
+.raise-row input[type="range"] { flex: 1; min-width: 90px; accent-color: var(--brand); touch-action: pan-x; }
+.raise-row b { width: 3em; text-align: right; }
 .sched-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
 .h24 { display: grid; grid-template-columns: repeat(24, 1fr); gap: 1px; margin: 4px 0 2px; max-width: 100%; }
 .h24 i { display: block; height: 12px; background: #e9dcc0; }

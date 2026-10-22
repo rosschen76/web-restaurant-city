@@ -49,6 +49,7 @@
       manager: false, // 值班店長（Lv.10 起可任命）
       wage: cand.boss ? 0 : Math.max(0, Math.floor(+cand.wage || 0)), // 日薪（每天午夜發放）
       unpaid: 0, // 連續領不到薪水的天數
+      raise: 0, // 加薪百分比（0～20）：日薪增加，速度與技術也提升
     };
   }
 
@@ -208,6 +209,7 @@
         manager: !!m.manager,
         wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1, // -1：舊存檔沒有日薪，稍後補上
         unpaid: Math.floor(num(m.unpaid, 0, 0, D.WAGE_QUIT_DAYS)),
+        raise: Math.floor(num(m.raise, 0, 0, D.RAISE.max)),
       });
       maxId = Math.max(maxId, id);
     }
@@ -222,7 +224,10 @@
         if (m.manager) seenManager = true;
       }
       // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
-      staff.forEach((m, i) => (m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i)));
+      staff.forEach((m, i) => {
+        m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i);
+        if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
+      });
       s.staff = staff;
       s.nextStaffId = maxId + 1;
     }

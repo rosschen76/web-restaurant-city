@@ -469,10 +469,11 @@
       let paid = 0;
       const quits = [];
       for (const rec of s.staff) {
-        if (rec.boss || !(rec.wage > 0)) continue;
-        if (s.coins >= rec.wage) {
-          s.coins -= rec.wage;
-          paid += rec.wage;
+        const wage = this.wageOf(rec);
+        if (rec.boss || !(wage > 0)) continue;
+        if (s.coins >= wage) {
+          s.coins -= wage;
+          paid += wage;
           rec.unpaid = 0;
         } else {
           rec.unpaid = Math.min(rec.unpaid + 1, WAGE_QUIT);
@@ -1029,7 +1030,7 @@
 
     stepStaff(m, dt) {
       const rec = m.rec;
-      const spd = STAFF_SPEED * rec.speed;
+      const spd = STAFF_SPEED * this.speedOf(rec);
       if (rec.boss) rec.energy = 100; // 店掌櫃是玩家本人，不會累
       const c = m.job ? this.customerById(m.job.cid) : null;
       if (m.job && (!c || c.state === 'leave' || c.claimedBy !== m.id)) {
@@ -1064,7 +1065,7 @@
           if (m.state === 'to_pay') {
             if (this.follow(m, spd, dt)) {
               m.state = 'paying';
-              m.payTotal = m.t = PAY_TIME / rec.speed;
+              m.payTotal = m.t = PAY_TIME / this.speedOf(rec);
               this.faceTo(m, pc);
             }
           } else {
@@ -1086,7 +1087,7 @@
           }
           if (this.follow(m, spd, dt)) {
             m.state = 'cleaning';
-            m.cleanTotal = m.t = CLEAN_TIME / rec.speed;
+            m.cleanTotal = m.t = CLEAN_TIME / this.speedOf(rec);
             m.dir = this.dirToward(m, t.seats[0].tx + 0.5, t.seats[0].ty + 0.5);
           }
           break;
@@ -1138,7 +1139,7 @@
           }
           if (this.follow(m, spd, dt)) {
             m.state = 'washing';
-            m.washTotal = m.t = PL.washTime / rec.speed;
+            m.washTotal = m.t = PL.washTime / this.speedOf(rec);
             m.dir = this.dirToward(m, sink.x + 0.5, sink.y + 0.5);
           }
           break;
@@ -1166,7 +1167,7 @@
         case 'to_customer':
           if (this.follow(m, spd, dt)) {
             m.state = 'taking';
-            m.t = TAKE_ORDER_TIME / rec.speed;
+            m.t = TAKE_ORDER_TIME / this.speedOf(rec);
             c.state = 'ordering';
             this.faceTo(m, c);
           }
@@ -1191,7 +1192,7 @@
           if (this.follow(m, spd, dt)) {
             const st = this.stoveByUid.get(m.stove);
             m.state = 'cooking';
-            m.cookTotal = this.cookTime(c.dish, st ? st.speed : 1, rec.skill);
+            m.cookTotal = this.cookTime(c.dish, st ? st.speed : 1, this.skillOf(rec));
             m.t = m.cookTotal;
             if (st) m.dir = this.dirToward(m, st.x + 0.5, st.y + 0.5);
           }
@@ -1217,7 +1218,7 @@
         case 'to_serve':
           if (this.follow(m, spd, dt)) {
             m.state = 'serving';
-            m.t = SERVE_TIME / rec.speed;
+            m.t = SERVE_TIME / this.speedOf(rec);
             this.faceTo(m, c);
           }
           break;
@@ -1243,6 +1244,22 @@
           break;
         default:
       }
+    }
+
+    /** 加薪帶來的能力加成倍率（1 = 沒加薪） */
+    raiseBoost(rec) {
+      return 1 + (D.RAISE.abilityPerPct * (rec.raise || 0)) / 100;
+    }
+    /** 實際速度／技術：基本能力（含升級成長）× 加薪加成 */
+    speedOf(rec) {
+      return rec.speed * this.raiseBoost(rec);
+    }
+    skillOf(rec) {
+      return rec.skill * this.raiseBoost(rec);
+    }
+    /** 實際日薪：基本日薪 × (1 + 加薪%) */
+    wageOf(rec) {
+      return rec.boss ? 0 : Math.round(rec.wage * (1 + (rec.raise || 0) / 100));
     }
 
     gainStaffXp(rec) {
@@ -1585,6 +1602,17 @@
       return this.done();
     }
 
+    /** 為員工加薪 0～20%（整數）：日薪照比例增加，能力同步提升 */
+    setRaise(id, pct) {
+      const rec = this.s.staff.find((m) => m.id === id);
+      if (!rec) return this.fail('找不到員工');
+      if (rec.boss) return this.fail('店掌櫃不領薪水，不能加薪');
+      pct = Math.round(+pct);
+      if (!(pct >= 0 && pct <= D.RAISE.max)) return this.fail(`加薪要在 0～${D.RAISE.max}% 之間`);
+      rec.raise = pct;
+      return this.done();
+    }
+
     setAutoSchedule(on) {
       this.s.schedule.auto = !!on;
       if (on) this.autoSchedule();
@@ -1592,39 +1620,78 @@
     }
 
     /**
-     * 自動排班：把 8 小時的班平均錯開，盡量蓋滿營業時間。
-     * 掌櫃排開店班、值班店長排收店班（兩人都能結帳），其他員工依序補中間的班。
+     * 自動排班：
+     * 1. 先蓋滿營業時間：掌櫃排開店班、值班店長（沒有就等級最高的員工）排收店班，兩人都能結帳；
+     * 2. 多出來的員工中，**等級高的（資深）優先去補尖峰**（客流高、已經排的人少的時段）；
+     * 3. **等級低的（資淺）分成 2～3 個時段**錯開上班，不全部擠在同一個鐘點。
      */
     autoSchedule() {
       const s = this.s;
       const { open, close } = s.schedule;
+      const SH = DAYC.shiftHours;
       const len = close - open;
-      const k = Math.max(1, Math.ceil(len / DAYC.shiftHours));
+      const k = Math.max(1, Math.ceil(len / SH));
       const slots = [];
-      for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - DAYC.shiftHours)) / (k - 1)));
+      for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - SH)) / (k - 1)));
       const slotOrder = k === 1 ? [0] : [0, k - 1, ...Array.from({ length: Math.max(0, k - 2) }, (_, i) => i + 1)];
-      const people = [...s.staff].sort((a, b) => (b.boss ? 2 : b.manager ? 1 : 0) - (a.boss ? 2 : a.manager ? 1 : 0) || a.id - b.id);
+      // 掌櫃、值班店長在前，其餘依等級由高到低
+      const rank = (m) => (m.boss ? 2 : m.manager ? 1 : 0);
+      const people = [...s.staff].sort((a, b) => rank(b) - rank(a) || b.level - a.level || a.id - b.id);
       const count = Array(24).fill(0); // 各鐘點已經排了幾個人
-      const cover = (start) => {
-        for (let j = 0; j < DAYC.shiftHours; j++) count[(start + j) % 24]++;
+      const hoursOf = (st) => {
+        const hs = [];
+        for (let h = Math.max(st, open); h < Math.min(st + SH, close); h++) hs.push(h % 24);
+        return hs;
       };
-      people.forEach((rec, i) => {
-        if (i < k) {
-          rec.shift = ((slots[slotOrder[i]] % 24) + 24) % 24; // 先排滿營業時間
-        } else {
-          // 多出來的人：排在人手最吃緊的尖峰（客流倍率高、已經排的人少）
-          let best = open;
-          let bestScore = -1;
-          for (let st = open; st <= Math.max(open, close - DAYC.shiftHours); st++) {
-            let score = 0;
-            for (let h = Math.max(st, open); h < Math.min(st + DAYC.shiftHours, close); h++) score += D.DEMAND[h % 24] / (1 + count[h % 24]);
-            if (score > bestScore + 1e-9) {
-              bestScore = score;
-              best = st;
-            }
-          }
-          rec.shift = ((best % 24) + 24) % 24;
+      const cover = (st) => {
+        for (let j = 0; j < SH; j++) count[(st + j) % 24]++;
+      };
+      const lastStart = Math.max(open, close - SH);
+      /** 這個起點能補多少「還缺人的需求」：尖峰時段權重高 */
+      const need = (st, peakOnly) => {
+        let score = 0;
+        for (const h of hoursOf(st)) {
+          const peak = D.demandKind(D.DEMAND[h]) === 'peak';
+          if (peakOnly && !peak) continue;
+          score += (peak ? D.DEMAND[h] : D.DEMAND[h] * 0.25) / (1 + count[h]);
         }
+        return score;
+      };
+      // 資淺員工可選的 2～3 個起點：把可排的區間等分
+      const span = lastStart - open;
+      const n = span >= 6 ? 3 : span >= 2 ? 2 : 1;
+      const juniorStarts = [];
+      for (let j = 0; j < n; j++) juniorStarts.push(n === 1 ? open : Math.round(open + (j * span) / (n - 1)));
+      const best = (cands, peakOnly) => {
+        let pick = cands[0];
+        let top = -1;
+        for (const st of cands) {
+          const sc = need(st, peakOnly);
+          if (sc > top + 1e-9) {
+            top = sc;
+            pick = st;
+          }
+        }
+        return pick;
+      };
+      const usedJunior = new Set(); // 資淺員工輪流用掉每個時段，才不會全擠在同一個
+      const allStarts = [];
+      for (let st = open; st <= lastStart; st++) allStarts.push(st);
+      people.forEach((rec, i) => {
+        let st;
+        if (i < k) st = slots[slotOrder[i]]; // 先排滿營業時間
+        else if (rec.level >= DAYC.seniorLevel) st = best(allStarts, true); // 資深：補尖峰
+        else {
+          // 資淺：分成 2～3 個時段，每個時段都用過一輪才重複
+          let cands = juniorStarts.filter((x) => !usedJunior.has(x));
+          if (!cands.length) {
+            usedJunior.clear();
+            cands = juniorStarts;
+          }
+          st = best(cands, false);
+          usedJunior.add(st);
+        }
+        rec.shift = ((st % 24) + 24) % 24;
         cover(rec.shift);
       });
     }

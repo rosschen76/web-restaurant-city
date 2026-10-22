@@ -130,7 +130,9 @@
   // 員工領日薪（每天午夜發放，不是一次性買斷）：依「現有人數」決定基本日薪，再乘上應徵者能力
   const WAGE_BASE = [0, 50, 80, 120, 180, 260, 360, 480, 600, 740, 900, 1080, 1280];
   const WAGE_QUIT_DAYS = 3; // 連續這麼多天領不到薪水，員工就會離職
-  const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430]; // 最高 10 級
+  const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430, 540, 660, 790, 930, 1080]; // 最高 15 級
+  // 加薪：玩家可為每位員工自訂 0～20% 的加薪；日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +0.5% 能力，最多 +10%）
+  const RAISE = { max: 20, abilityPerPct: 0.5 };
   const FEED_COST = 15;
   const FEED_AMOUNT = 50;
 
@@ -183,6 +185,7 @@
     shiftHours: 8, // 友善職場：每位員工每天最多上班 8 小時（硬性規定，不能超時）
     restFullHours: 2, // 離開崗位休息滿 2 小時，體力自動恢復
     managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
+    seniorLevel: 5, // 自動排班：達到這個等級算資深，優先補尖峰；以下的資淺員工分成 2～3 個時段上班
     closeOvertimeMin: 120, // 打烊後還有客人或餐具沒收洗完，在班的員工留下收店，最多加班這麼久（分鐘）
   };
 
@@ -277,7 +280,7 @@
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,
     STAR_STEPS, MAX_STARS, STAR_TITLES, starsForAppeal, nextStarAppeal,
-    maxStaffForLevel, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
+    maxStaffForLevel, RAISE, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
     PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,

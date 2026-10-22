@@ -77,16 +77,79 @@ test('尖峰時候位的耐心延長、客滿走掉的風評扣分減半；離�
   }
 });
 
-test('自動排班：多出來的人排在尖峰（人手最吃緊的時段），而不是全部擠在開店', () => {
-  const g = mk(7, {}, (s) => ((s.coins = 1e6), (s.level = 20)));
-  for (let i = 0; i < 3; i++) assert.equal(g.hire(i % 3).ok, true);
-  g.setBusinessHours(8, 22); // 14 小時：需要 2 個班蓋滿，多出來的 2 人要補尖峰
+/** 開好店、雇好人，回傳遊戲；levels 是各員工（掌櫃之外）的等級 */
+function staffed(levels, open = 8, close = 22, seed = 7) {
+  const g = mk(seed, {}, (s) => ((s.coins = 1e7), (s.level = 40)));
+  levels.forEach((lv, i) => {
+    assert.equal(g.hire(i % 3).ok, true);
+    g.s.staff[g.s.staff.length - 1].level = lv;
+  });
+  g.setBusinessHours(open, close);
   g.setAutoSchedule(true);
+  return g;
+}
+const peakShare = (g, rec) => {
+  let peak = 0;
+  let n = 0;
+  for (let j = 0; j < D.DAY.shiftHours; j++) {
+    const h = (rec.shift + j) % 24;
+    if (h < g.s.schedule.open || h >= g.s.schedule.close) continue;
+    n++;
+    if (D.demandKind(D.DEMAND[h]) === 'peak') peak++;
+  }
+  return n ? peak / n : 0;
+};
+
+test('自動排班：資深員工（等級高）補尖峰，午餐與晚餐尖峰人手都夠', () => {
+  const g = staffed([8, 8, 8, 8]);
   const cov = g.coverage();
   const lunch = [12, 13].map((h) => cov.staff[h]);
   const dinner = [18, 19].map((h) => cov.staff[h]);
-  assert.ok(Math.min(...lunch) >= 2 && Math.min(...dinner) >= 2, `午晚餐尖峰人手：${lunch} / ${dinner}`);
-  assert.ok(new Set(g.s.staff.map((m) => m.shift)).size >= 3, '班表錯開，不是全部擠在同一個鐘點上班');
+  assert.ok(Math.min(...lunch) >= 3 && Math.min(...dinner) >= 3, `午餐 ${lunch}、晚餐 ${dinner}`);
   for (let h = 8; h < 22; h++) assert.ok(cov.staff[h] >= 1, `${h}:00 有人在班`);
-  assert.ok(g.s.staff.every((m) => m.shift >= 0 && m.shift <= 23));
+});
+
+test('自動排班：資淺員工（等級低）分成 2～3 個時段上班，不是全部擠在同一個鐘點', () => {
+  const g = staffed([1, 1, 2, 2, 3, 3]);
+  const starts = new Set(g.s.staff.filter((m) => !m.boss).map((m) => m.shift));
+  assert.ok(starts.size >= 2 && starts.size <= 4, `起點：${[...starts].sort((a, b) => a - b)}`); // 3 個時段 + 掌櫃之外的收店班最多再多一個
+  const juniors = g.s.staff.filter((m) => !m.boss && m.level < D.DAY.seniorLevel);
+  const jStarts = new Set(juniors.slice(2).map((m) => m.shift)); // 前面的人先蓋滿營業時間，後面才是分時段的
+  assert.ok(jStarts.size >= 2, `分時段的資淺員工起點：${[...jStarts]}`);
+  assert.ok(jStarts.size <= 3);
+  for (const m of g.s.staff) assert.ok(m.shift >= 8 && m.shift <= 14, `${m.name} 在 ${m.shift} 點上班（要在可排的區間內）`);
+});
+
+test('自動排班：資深員工比資淺員工更集中在尖峰', () => {
+  const g = staffed([9, 9, 9, 1, 1, 1]);
+  const extras = g.s.staff.filter((m) => !m.boss).slice(2); // 前兩位先蓋滿營業時間
+  const seniors = extras.filter((m) => m.level >= D.DAY.seniorLevel);
+  const juniors = extras.filter((m) => m.level < D.DAY.seniorLevel);
+  assert.ok(seniors.length && juniors.length);
+  const avg = (xs) => xs.reduce((a, b) => a + peakShare(g, b), 0) / xs.length;
+  assert.ok(avg(seniors) >= avg(juniors), `資深 ${avg(seniors).toFixed(2)}、資淺 ${avg(juniors).toFixed(2)}`);
+});
+
+test('自動排班：掌櫃排開店班、值班店長排收店班，營業時間內隨時有人能結帳', () => {
+  const g = staffed([10, 6, 3, 2]);
+  const mgr = g.s.staff.find((m) => !m.boss && m.level >= D.DAY.managerLevel);
+  assert.equal(g.assignManager(mgr.id).ok, true);
+  const cov = g.coverage();
+  assert.equal(g.s.staff[0].shift, 8, '掌櫃開店');
+  assert.equal(mgr.shift, 14, '值班店長收店（14:00–22:00）');
+  for (let h = 8; h < 22; h++) assert.ok(cov.payers[h] >= 1, `${h}:00 有掌櫃或店長在班`);
+});
+
+test('自動排班：營業時間不到 8 小時時只有一個可排的起點，大家都從開店起', () => {
+  const g = staffed([8, 1, 1], 9, 17);
+  assert.ok(g.s.staff.every((m) => m.shift === 9));
+});
+
+test('自動排班：結果固定（同樣的人手與營業時間排出同一份班表）', () => {
+  const a = staffed([8, 6, 3, 1, 1]);
+  const b = staffed([8, 6, 3, 1, 1]);
+  assert.deepEqual(a.s.staff.map((m) => m.shift), b.s.staff.map((m) => m.shift));
+  const before = a.s.staff.map((m) => m.shift);
+  a.autoSchedule();
+  assert.deepEqual(a.s.staff.map((m) => m.shift), before);
 });
