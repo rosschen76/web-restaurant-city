@@ -11,21 +11,15 @@ const mk = (seed = 1, opts = {}, mut) => {
   return new RC.Game(s, { seed, ...opts });
 };
 
-test('員工名額：到 Lv18 為 8 位（和原本一樣），之後 Lv21/24/27/30 各 +1，最多 12 位', () => {
-  const expect = { 1: 1, 2: 2, 4: 3, 6: 4, 9: 5, 12: 6, 15: 7, 18: 8, 20: 8, 21: 9, 24: 10, 27: 11, 30: 12, 50: 12 };
+test('員工名額：到 Lv18 為 8 位，Lv21/24/27/30 各 +1（12 位），Lv33/36/39/42 再各 +1，最多 16 位', () => {
+  const expect = { 1: 1, 2: 2, 4: 3, 6: 4, 9: 5, 12: 6, 15: 7, 18: 8, 20: 8, 21: 9, 24: 10, 27: 11, 30: 12, 32: 12, 33: 13, 36: 14, 39: 15, 42: 16, 50: 16 };
   for (const [lv, n] of Object.entries(expect)) assert.equal(D.maxStaffForLevel(+lv), n, 'Lv' + lv);
   let prev = 0;
   for (let lv = 1; lv <= D.MAX_LEVEL; lv++) {
     const n = D.maxStaffForLevel(lv);
-    assert.ok(n >= prev && n <= 12);
+    assert.ok(n >= prev && n <= 16);
     prev = n;
   }
-});
-
-test('日薪表涵蓋所有名額；越後面的員工日薪越高', () => {
-  const need = D.maxStaffForLevel(D.MAX_LEVEL) + 1;
-  assert.ok(D.WAGE_BASE.length >= need, `日薪表只有 ${D.WAGE_BASE.length} 級`);
-  for (let i = 2; i < D.WAGE_BASE.length; i++) assert.ok(D.WAGE_BASE[i] > D.WAGE_BASE[i - 1]);
 });
 
 test('擴建階段：邊長遞增、等級與費用遞增、最後一階 18×18', () => {

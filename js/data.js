@@ -124,11 +124,12 @@
   }
   /** 下一顆星需要的魅力；已經三星則回傳 null */
   const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
-  // 員工名額：Lv2/4/6/9/12/15/18 各 +1（到 8 位），之後 Lv21/24/27/30 再各 +1（最多 12 位），讓 20 級以後仍有成長
-  const STAFF_UNLOCK = [2, 4, 6, 9, 12, 15, 18, 21, 24, 27, 30];
+  // 員工名額：Lv2/4/6/9/12/15/18 各 +1（到 8 位），之後 Lv21/24/27/30 再各 +1（12 位），Lv33/36/39/42 再各 +1（最多 16 位），讓 20 級以後仍有成長
+  const STAFF_UNLOCK = [2, 4, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42];
   const maxStaffForLevel = (lv) => 1 + STAFF_UNLOCK.filter((l) => lv >= l).length;
-  // 員工領日薪（每天午夜發放，不是一次性買斷）：依「現有人數」決定基本日薪，再乘上應徵者能力
-  const WAGE_BASE = [0, 50, 80, 120, 180, 260, 360, 480, 600, 740, 900, 1080, 1280];
+  // 員工領日薪（每天午夜發放，不是一次性買斷）：日薪只看員工本身——能力（入職時的速度與技術）越強越貴、資歷（等級）越高越貴，
+  // 和「第幾個被雇用」無關：日薪 = base × 能力² × (1 + seniorA × (等級 - 1)^seniorP)。Lv5 約為新人的 2.8 倍、Lv10 約 7 倍、Lv15 約 14 倍。
+  const WAGE = { base: 45, seniorA: 0.2, seniorP: 1.57 };
   const WAGE_QUIT_DAYS = 3; // 連續這麼多天領不到薪水，員工就會離職
   const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430, 540, 660, 790, 930, 1080]; // 最高 15 級
   // 加薪：玩家可為每位員工自訂 0～20% 的加薪；日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +0.5% 能力，最多 +10%）
@@ -194,7 +195,7 @@
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 4, maxGap: 3 };
+  const GAME_VERSION = { current: 5, maxGap: 4 };
 
   /* ───────── 客流：尖峰與離峰 ───────── */
   // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
@@ -212,6 +213,29 @@
   }
   /** 'peak' 尖峰 | 'normal' 一般 | 'off' 離峰 */
   const demandKind = (v) => (v >= PEAK_AT ? 'peak' : v < OFFPEAK_AT ? 'off' : 'normal');
+  // 員工福利：玩家每天午夜可從薪資總額提撥福利金（0～20%）、從當天盈餘提撥分紅（0～20%，平分給所有員工），
+  // 用來維持「士氣」（0～100，每間店各一個）。員工越多越難帶：人數超過 crowdFrom 後，每多一位目標士氣 -crowdPer，
+  // 所以員工到 16 位時，福利金與分紅都得提高才撐得住。士氣高於 mid 速度／技術小幅提升、低於 mid 則下降；
+  // 士氣連續 lowDays 天低於 lowBelow，就有一位員工心灰意冷離職（士氣回升 quitRelief）。
+  const MORALE = {
+    welfareMax: 20,
+    bonusMax: 20,
+    welfareDefault: 5,
+    start: 60,
+    base: 40, // 沒有福利時的目標士氣
+    perWelfare: 3, // 福利金每 1% 的目標士氣
+    perBonus: 1.5, // 分紅每 1% 的目標士氣
+    crowdFrom: 4, // 超過這個人數開始有「人多嘴雜」的扣分
+    crowdPer: 3,
+    follow: 0.25, // 每天朝目標靠近的比例
+    unpaidHit: 15, // 領不到薪水的員工占全體的比例 × 這個值，扣到目標士氣
+    mid: 60,
+    abilityLo: 0.1, // 士氣 0 時速度／技術 -10%
+    abilityHi: 0.07, // 士氣 100 時 +7%
+    lowBelow: 25,
+    lowDays: 3,
+    quitRelief: 12,
+  };
   const DEMAND_NAMES = { peak: '尖峰', normal: '一般', off: '離峰' };
 
   /* ───────── 客流規模與入座控管（平衡性） ─────────
@@ -226,7 +250,7 @@
     appealMin: 0.7, // 魅力為 0 的客流倍率
     appealSpan: 0.6, // 魅力達到 appealFull 時再增加的倍率
     appealFull: 400,
-    minGap: 2, // 客人間隔的下限（秒）
+    minGap: 1.5, // 客人間隔的下限（秒）
     maxGap: 30,
     admitPerStaff: 2.2, // 每位在班員工同時能照顧幾位「還沒開始用餐」的客人
     admitMin: 3,
@@ -299,7 +323,7 @@
     expansions,
     MAX_LEVEL, xpForLevel, levelReward,
     STAR_STEPS, MAX_STARS, STAR_TITLES, starsForAppeal, nextStarAppeal,
-    maxStaffForLevel, RAISE, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
+    maxStaffForLevel, RAISE, WAGE, MORALE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
     PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, BRANCH, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
