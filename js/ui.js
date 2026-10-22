@@ -981,6 +981,7 @@
       const warns = [];
       if (gaps.length) warns.push(`營業時間內 ${fmtH(gaps)} 沒有人在班，客人進不了門。`);
       if (thin.length) warns.push(`尖峰時段 ${fmtH(thin)} 只有 1 人在班，客人一多就會排隊流失，建議把其他人的班排進來。`);
+      if (!gaps.includes(sc.close - 1) && cov.staff[sc.close - 1] === 0) warns.push('打烊時沒有人留下收店：最後一小時沒有人在班，髒碗要留給明天早上的人洗。');
       if (noPay.length) warns.push(`${fmtH(noPay)} 在班的人裡沒有店掌櫃或值班店長，客人只能自助結帳（風評較差）。`);
       const rows = [...s.staff]
         .sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0))
@@ -999,7 +1000,7 @@
         <div class="sched-row"><button class="btn small ${sc.auto ? 'primary' : ''}" data-act="auto-sched">自動排班：${sc.auto ? '開' : '關'}</button>
           <span class="sub">${sc.auto ? `開啟時，班表會跟著營業時間與人員自動調整：掌櫃開店、值班店長（或等級最高的員工）收店；Lv.${D.DAY.seniorLevel} 以上的資深員工優先補尖峰，等級較低的分成 2～3 個時段錯開上班` : '手動排班：自己決定每個人幾點上班'}</span></div>
         <div class="sub" style="margin:4px 0">友善職場：每位員工（包含店掌櫃）每天排定上班 ${D.DAY.shiftHours} 小時，離開崗位休息滿 ${D.DAY.restFullHours} 小時，體力會自動恢復。</div>
-        <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、餐具洗完才下班（最多加班 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班。</div>
+        <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、桌子收乾淨、<b>碗洗完才能下班</b>（沒有洗碗槽，或做不完時最多留 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班；所以<b>打烊時一定要有人在班</b>，才有人洗碗。</div>
         <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
         <div class="h24-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
         <div class="sub" style="margin-top:8px">客人上門的頻率（顏色越深客人越多；亮格＝營業時間）</div>${demandBar}

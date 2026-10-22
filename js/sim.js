@@ -429,7 +429,7 @@
           } else if (m.overtime && abs - m.endingSince >= DAYC.closeOvertimeMin) {
             this.clockOut(m, abs); // 收店加班已經到上限：不管手上的事，馬上下班
           } else if (closing) {
-            // 班表結束時已經打烊、還有客人或餐具沒處理完：留下來把店收乾淨（加班有上限，不會無限留下）
+            // 班表結束時已經打烊、還有客人或餐具沒處理完：留下來把店收乾淨，洗完碗才能下班（安全上限 6 小時，不會無限留下）
             if (!m.overtime) {
               m.overtime = true;
               m.endingSince = abs;
@@ -452,7 +452,9 @@
     /** 打烊後還有事沒做完：客人還在店裡（用餐、等結帳）、桌上有餐具、洗碗槽裡有髒盤子、手上還捧著餐具 */
     closingWork() {
       if (!this.dayMode || this.isOpen()) return false;
-      return this.customers.length > 0 || this.dirty.size > 0 || this.s.sinkDirty > 0 || this.crew.some((m) => m.carryPlates > 0);
+      // 沒有洗碗槽就沒辦法洗：髒盤子不算（免得員工為了洗不掉的碗一直留到安全上限）
+      const washable = this.sinks.length > 0;
+      return this.customers.length > 0 || (washable && (this.dirty.size > 0 || this.s.sinkDirty > 0)) || this.crew.some((m) => m.carryPlates > 0);
     }
 
     /** 往前走 dt 秒的時鐘；回傳這一步經過的遊戲分鐘數。 */
