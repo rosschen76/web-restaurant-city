@@ -46,11 +46,102 @@
       energy: 100,
       boss: !!cand.boss,
       shift: Number.isInteger(cand.shift) ? cand.shift : D.DAY.defaultOpen, // 上班時間（整點）：從這個鐘點起連續 8 小時
-      manager: false, // 值班店長（Lv.10 起可任命）
+      manager: false, // 擔任店長（正店長或副店長）
+      head: false, // 正店長（Lv.10 以上、每間店 1 位）；manager 為 true 而 head 為 false 就是副店長（Lv.8 以上）
       wage: cand.boss ? 0 : Math.max(0, Math.floor(+cand.wage || 0)), // 日薪（每天午夜發放）
       unpaid: 0, // 連續領不到薪水的天數
       raise: 0, // 加薪百分比（0～20）：日薪增加，速度與技術也提升
     };
+  }
+
+  /* ───────── 公司與店面 ─────────
+   * 整個遊戲是一個「公司」：共用的欄位（金幣、等級、菜單、倉庫、任務…）存在公司層，
+   * 每間店只有自己的欄位（格局、員工、風評…）。店面物件用存取器把共用欄位接到公司層，
+   * 所以 s.coins、s.level 這些既有寫法完全不用改；JSON.stringify(店面) 仍會得到「單店的平面存檔」。 */
+  const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
+  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
+
+  /** 把店面接上公司：共用欄位改成存取器（寫入公司層）。 */
+  function attach(st, co) {
+    for (const k of CORE_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(st, k) && !(Object.getOwnPropertyDescriptor(st, k).get)) co.core[k] = st[k]; // 第一次接上：把現有值搬到公司層
+      Object.defineProperty(st, k, {
+        get() {
+          return co.core[k];
+        },
+        set(v) {
+          co.core[k] = v;
+        },
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    Object.defineProperty(st, 'company', { value: co, enumerable: false, configurable: true, writable: true });
+    return st;
+  }
+
+  /** 建立公司：main 是主店。 */
+  function link(main, hq) {
+    hq = hq || {};
+    const co = {
+      core: {},
+      stores: [main],
+      gameMin: hq.gameMin || 0, // 整個公司累計經過的遊戲分鐘（由玩家正在檢視的店推進）
+      gm: null, // 總經理（玩家）：有分店之後不再屬於任何一間店；只有主店時玩家是店掌櫃（員工名單裡的 boss）
+      chainDays: 0, // 所有分店風評都低迷的連續天數
+      nextStoreId: hq.nextStoreId || 1,
+      activeId: 0,
+      get active() {
+        return this.stores.find((x) => x.id === this.activeId) || this.stores[0];
+      },
+      storeById(id) {
+        return this.stores.find((x) => x.id === id) || null;
+      },
+    };
+    attach(main, co);
+    return co;
+  }
+
+  /** 新店面的起始擺設：兩張桌各兩張椅、一座爐灶、一個洗碗槽、一盆小植物 */
+  function starterItems(st) {
+    const add = (id, x, y, rot) => st.items.push({ uid: st.nextUid++, id, x, y, rot: rot || 0 });
+    add('stove_gas', 5, 0, 0);
+    add('table_wood', 3, 4, 0);
+    add('chair_stool', 2, 4, 0);
+    add('chair_stool', 4, 4, 2);
+    add('table_wood', 3, 6, 0);
+    add('chair_stool', 2, 6, 0);
+    add('chair_stool', 4, 6, 2);
+    add('plant_pot', 7, 0, 0);
+    add('sink', 3, 0, 0);
+  }
+
+  /** 一間新的分店（只有店面自己的欄位）。staffList 是派去的正店長與副店長（已經整理好的員工物件）。 */
+  function newStore(id, name, staffList, rng, clockFrom) {
+    rng = rng || RC.util.makeRng(Date.now());
+    const st = {
+      id,
+      kind: 'branch',
+      name: String(name || '分店').trim().slice(0, D.BRANCH.nameMax) || '分店',
+      room: { stage: 0, floor: 'wood', wall: 'cream' },
+      items: [],
+      nextUid: 1,
+      staff: Array.isArray(staffList) ? staffList : [],
+      candidates: [],
+      schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
+      reputation: 0,
+      lowDays: 0,
+      over: null,
+      stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
+      sinkDirty: 0,
+      day: clockFrom ? clockFrom.day : 1,
+      clock: clockFrom ? clockFrom.clock : D.DAY.defaultOpen * 60,
+      syncedMin: 0,
+      report: null, // 最近一次結算的摘要
+    };
+    starterItems(st);
+    for (let i = 0; i < 3; i++) st.candidates.push(makeCandidate(rng, st.staff.map((m) => m.name)));
+    return st;
   }
 
   function newGame(rng) {
@@ -65,6 +156,10 @@
     };
     const s = {
       v: SAVE_VERSION,
+      id: 0,
+      kind: 'main',
+      syncedMin: 0,
+      report: null,
       name: '我的小吃店',
       coins: 300,
       xp: 0,
@@ -91,54 +186,20 @@
       flags: { welcomed: false },
       savedAt: 0,
     };
-    const add = (id, x, y, rot) => s.items.push({ uid: s.nextUid++, id, x, y, rot: rot || 0 });
-    // 起始擺設：兩張桌各兩張椅（不併桌，所以至少要兩桌）、一座爐灶、一個洗碗槽、一盆小植物
-    add('stove_gas', 5, 0, 0);
-    add('table_wood', 3, 4, 0);
-    add('chair_stool', 2, 4, 0);
-    add('chair_stool', 4, 4, 2);
-    add('table_wood', 3, 6, 0);
-    add('chair_stool', 2, 6, 0);
-    add('chair_stool', 4, 6, 2);
-    add('plant_pot', 7, 0, 0);
-    add('sink', 3, 0, 0);
+    starterItems(s);
     for (let i = 0; i < 3; i++) s.candidates.push(makeCandidate(rng, s.staff.map((m) => m.name)));
+    link(s);
     return s;
   }
 
   const num = (v, d, lo, hi) => (typeof v === 'number' && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 
-  /** 把任意 JSON 整理成合法 state（缺欄位補預設、丟掉壞資料）。 */
-  function normalize(raw, rng) {
-    const base = newGame(rng);
-    if (!raw || typeof raw !== 'object') return base;
-    const s = base;
-    s.name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 12) : s.name;
-    s.coins = Math.floor(num(raw.coins, s.coins, 0, 1e12));
-    s.level = Math.floor(num(raw.level, 1, 1, D.MAX_LEVEL));
-    s.xp = Math.floor(num(raw.xp, 0, 0, 1e9));
-    const st = Math.floor(num(raw.room && raw.room.stage, 0, 0, D.expansions.length - 1));
-    s.room = { stage: st, floor: 'wood', wall: 'cream' };
-    s.owned = { floors: ['wood'], walls: ['cream'] };
-    if (raw.owned) {
-      for (const f of raw.owned.floors || []) if (D.floors[f] && !s.owned.floors.includes(f)) s.owned.floors.push(f);
-      for (const w of raw.owned.walls || []) if (D.walls[w] && !s.owned.walls.includes(w)) s.owned.walls.push(w);
-    }
-    if (raw.room) {
-      if (s.owned.floors.includes(raw.room.floor)) s.room.floor = raw.room.floor;
-      if (s.owned.walls.includes(raw.room.wall)) s.room.wall = raw.room.wall;
-    }
-    // 物件：已知 id、座標在範圍內、不重疊
-    s.items = [];
-    s.nextUid = 1;
-    // 已取消的商品（地毯）：擺放中與倉庫裡的都按原價退款
-    let refund = 0;
-    for (const it of Array.isArray(raw.items) ? raw.items : []) if (it && D.LEGACY_REFUND[it.id]) refund += D.LEGACY_REFUND[it.id];
-    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.LEGACY_REFUND[id] && n > 0) refund += D.LEGACY_REFUND[id] * Math.floor(num(n, 0, 0, 9999));
-    s.coins += refund;
-    const exp = D.expansions[st];
+  /** 物件：已知 id、座標在範圍內、不重疊。回傳 { items, nextUid, taken }。 */
+  function cleanItems(rawItems, exp) {
+    const items = [];
+    let nextUid = 1;
     const taken = new Set();
-    for (const it of Array.isArray(raw.items) ? raw.items : []) {
+    for (const it of Array.isArray(rawItems) ? rawItems : []) {
       const def = it && D.furniture[it.id];
       if (!def) continue;
       const rot = (Math.floor(num(it.rot, 0, 0, 3)) | 0) & 3;
@@ -156,35 +217,16 @@
         }
       if (bad) continue;
       tiles.forEach((k) => taken.add(k));
-      s.items.push({ uid: s.nextUid++, id: def.id, x, y, rot });
+      items.push({ uid: nextUid++, id: def.id, x, y, rot });
     }
-    s.inventory = {};
-    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.furniture[id] && n > 0) s.inventory[id] = Math.floor(num(n, 0, 0, 9999));
-    s.sinkDirty = Math.floor(num(raw.sinkDirty, 0, 0, 1e6));
-    s.day = Math.floor(num(raw.day, 1, 1, 1e6));
-    s.clock = num(raw.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
-    const sc = raw.schedule || {};
-    const open = Math.floor(num(sc.open, D.DAY.defaultOpen, 0, 23));
-    const close = Math.floor(num(sc.close, D.DAY.defaultClose, 1, 24));
-    s.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
-    s.reputation = num(raw.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
-    s.lowDays = Math.floor(num(raw.lowDays, 0, 0, 1e4));
-    const ov = raw.over;
-    s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
-    // 舊存檔沒有洗碗槽：自動補一個（優先放在靠牆的一排；沒有空位就放進倉庫）
-    if (!s.items.some((i) => i.id === 'sink') && !(s.inventory.sink > 0)) {
-      let spot = null;
-      for (let y = 0; y < exp.h && !spot; y++)
-        for (let x = 0; x < exp.w && !spot; x++) if (!taken.has(x + ',' + y) && !(y === D.DOOR_Y && x <= 1)) spot = { x, y };
-      if (spot) s.items.push({ uid: s.nextUid++, id: 'sink', x: spot.x, y: spot.y, rot: 0 });
-      else s.inventory.sink = 1;
-      s.flags.addedSink = true;
-    }
-    s.dishes = { danbing: { cooked: 0 } };
-    for (const [id, v] of Object.entries(raw.dishes || {})) if (D.dishes[id]) s.dishes[id] = { cooked: Math.floor(num(v && v.cooked, 0, 0, 1e9)) };
+    return { items, nextUid, taken };
+  }
+
+  /** 員工名單：丟掉壞資料、補預設值。回傳 { staff, maxId }（wage 為 -1 代表舊存檔沒有日薪，由 fixStaffRoles 補上）。 */
+  function cleanStaff(rawList) {
     const staff = [];
     let maxId = 0;
-    for (const m of Array.isArray(raw.staff) ? raw.staff : []) {
+    for (const m of Array.isArray(rawList) ? rawList : []) {
       if (!m || typeof m.name !== 'string') continue;
       const id = Math.floor(num(m.id, 0, 1, 1e9));
       if (!id || staff.some((x) => x.id === id)) continue;
@@ -207,30 +249,190 @@
         boss: !!m.boss,
         shift: Math.floor(num(m.shift, D.DAY.defaultOpen, 0, 23)),
         manager: !!m.manager,
-        wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1, // -1：舊存檔沒有日薪，稍後補上
+        head: !!m.head,
+        wage: typeof m.wage === 'number' && isFinite(m.wage) ? Math.floor(num(m.wage, 0, 0, 1e6)) : -1,
         unpaid: Math.floor(num(m.unpaid, 0, 0, D.WAGE_QUIT_DAYS)),
         raise: Math.floor(num(m.raise, 0, 0, D.RAISE.max)),
       });
       maxId = Math.max(maxId, id);
     }
-    if (staff.length) {
-      // 一定要有且只有一位店掌櫃（舊存檔沒有這個欄位：第一位員工就是掌櫃）
+    return { staff, maxId };
+  }
+
+  /** 整理員工的角色：店掌櫃（hasBoss 為 true 時一定要有且只有一位、false 時沒有、null 時照存檔）、值班店長（最多 2 位、Lv.10 以上、不是掌櫃）、日薪 */
+  function fixStaffRoles(staff, hasBoss) {
+    if (hasBoss === true) {
+      // 舊存檔沒有這個欄位：第一位員工就是掌櫃
       const first = staff.findIndex((m) => m.boss);
       staff.forEach((m, i) => (m.boss = i === (first < 0 ? 0 : first)));
-      // 值班店長：最多一位、不能是掌櫃、要達到門檻等級
-      let seenManager = false;
-      for (const m of staff) {
-        if (m.manager && (m.boss || m.level < D.DAY.managerLevel || seenManager)) m.manager = false;
-        if (m.manager) seenManager = true;
+    } else if (hasBoss === false) staff.forEach((m) => (m.boss = false));
+    // hasBoss 為 null（分店）：掌櫃旗標照存檔，全公司只能有一位的規則最後統一整理
+    // 店長編制（雙店長制）：正店長最多 1 位（Lv.10 以上）、副店長最多 1 位（Lv.8 以上）
+    // 舊存檔的「值班店長」：第一位升為正店長
+    if (!staff.some((m) => m.head)) {
+      const first = staff.find((m) => m.manager && !m.boss);
+      if (first && first.level >= D.DAY.managerLevel) first.head = true;
+    }
+    let hasHead = false;
+    for (const m of staff) {
+      if (m.boss) {
+        m.manager = false;
+        m.head = false;
+      } else if (m.head && !hasHead && m.level >= D.DAY.managerLevel) {
+        hasHead = true;
+        m.manager = true;
+      } else m.head = false;
+    }
+    let hasDeputy = false;
+    for (const m of staff) {
+      if (m.manager && !m.head) {
+        if (!hasDeputy && !m.boss && m.level >= D.DAY.deputyLevel) hasDeputy = true;
+        else m.manager = false;
       }
-      // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
-      staff.forEach((m, i) => {
-        m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i);
-        if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
-      });
+    }
+    // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
+    staff.forEach((m, i) => {
+      m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i);
+      if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
+    });
+  }
+
+  /** 總經理（玩家）的身分資料 */
+  function cleanGm(g) {
+    const lk = (g && g.look) || {};
+    return {
+      id: Math.floor(num(g && g.id, 1, 1, 1e9)),
+      name: String((g && g.name) || '阿福').slice(0, 8),
+      look: {
+        skin: Math.floor(num(lk.skin, 0, 0, D.PALETTE.skin.length - 1)),
+        hair: Math.floor(num(lk.hair, 0, 0, D.PALETTE.hair.length - 1)),
+        hairStyle: Math.floor(num(lk.hairStyle, 0, 0, 2)),
+        top: Math.floor(num(lk.top, 0, 0, D.PALETTE.top.length - 1)),
+        pants: Math.floor(num(lk.pants, 0, 0, D.PALETTE.pants.length - 1)),
+      },
+      speed: num(g && g.speed, 1.15, 0.5, 2),
+      skill: num(g && g.skill, 1.1, 0.5, 2),
+    };
+  }
+
+  /** 分店（只有店面自己的欄位）；壞資料回傳 null。 */
+  function normalizeBranch(rb, co, rng) {
+    if (!rb || typeof rb !== 'object') return null;
+    const id = Math.floor(num(rb.id, 0, 1, 1e6));
+    if (!id || co.stores.some((x) => x.id === id)) return null;
+    const st = newStore(id, typeof rb.name === 'string' ? rb.name : '分店', null, rng);
+    const owned = co.core.owned || { floors: ['wood'], walls: ['cream'] };
+    const stage = Math.floor(num(rb.room && rb.room.stage, 0, 0, D.expansions.length - 1));
+    st.room = { stage, floor: 'wood', wall: 'cream' };
+    if (rb.room && owned.floors.includes(rb.room.floor)) st.room.floor = rb.room.floor;
+    if (rb.room && owned.walls.includes(rb.room.wall)) st.room.wall = rb.room.wall;
+    const cleaned = cleanItems(rb.items, D.expansions[stage]);
+    st.items = cleaned.items;
+    st.nextUid = cleaned.nextUid;
+    if (!st.items.some((i) => i.id === 'sink')) {
+      // 洗碗槽是必要設備：沒有就補一個放進最近的空格
+      const exp = D.expansions[stage];
+      outer: for (let y = 0; y < exp.h; y++) for (let x = 0; x < exp.w; x++) if (!cleaned.taken.has(x + ',' + y) && !(y === D.DOOR_Y && x <= 1)) {
+        st.items.push({ uid: st.nextUid++, id: 'sink', x, y, rot: 0 });
+        break outer;
+      }
+    }
+    const { staff } = cleanStaff(rb.staff);
+    fixStaffRoles(staff, null);
+    st.staff = staff;
+    if (Array.isArray(rb.candidates) && rb.candidates.length === 3) {
+      st.candidates = rb.candidates.filter((c) => c && typeof c.name === 'string' && c.look).slice(0, 3).map((c) => ({ name: c.name.slice(0, 8), look: c.look, speed: num(c.speed, 1, 0.5, 2), skill: num(c.skill, 1, 0.5, 2) }));
+      if (st.candidates.length !== 3) st.candidates = newStore(id, '', null, rng).candidates;
+    }
+    const sc = rb.schedule || {};
+    const open = Math.floor(num(sc.open, D.DAY.defaultOpen, 0, 23));
+    const close = Math.floor(num(sc.close, D.DAY.defaultClose, 1, 24));
+    st.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
+    st.reputation = num(rb.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
+    st.lowDays = Math.floor(num(rb.lowDays, 0, 0, 1e4));
+    st.over = null; // 分店倒閉時就直接關掉了，存檔裡不會有「已倒閉的分店」
+    const rs = rb.stats || {};
+    st.stats = {
+      served: Math.floor(num(rs.served, 0, 0, 1e9)),
+      angry: Math.floor(num(rs.angry, 0, 0, 1e9)),
+      walkouts: Math.floor(num(rs.walkouts, 0, 0, 1e9)),
+      earned: Math.floor(num(rs.earned, 0, 0, 1e13)),
+      collects: Math.floor(num(rs.collects, 0, 0, 1e9)),
+      tips: Math.floor(num(rs.tips, 0, 0, 1e13)),
+      playTime: num(rs.playTime, 0, 0, 1e10),
+    };
+    st.sinkDirty = Math.floor(num(rb.sinkDirty, 0, 0, 1e6));
+    st.day = Math.floor(num(rb.day, 1, 1, 1e6));
+    st.clock = num(rb.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
+    st.syncedMin = num(rb.syncedMin, 0, 0, 1e12);
+    const rp = rb.report;
+    st.report = rp && typeof rp === 'object' ? { day: Math.floor(num(rp.day, 1, 1, 1e6)), served: Math.floor(num(rp.served, 0, 0, 1e9)), earned: Math.floor(num(rp.earned, 0, 0, 1e13)), wages: Math.floor(num(rp.wages, 0, 0, 1e13)), reputation: num(rp.reputation, 0, D.REPUTATION.min, D.REPUTATION.max) } : null;
+    attach(st, co);
+    return st;
+  }
+
+  /** 把任意 JSON 整理成合法 state（缺欄位補預設、丟掉壞資料）。 */
+  function normalize(raw, rng) {
+    const base = newGame(rng);
+    if (!raw || typeof raw !== 'object') return base;
+    const s = base;
+    s.name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 12) : s.name;
+    s.coins = Math.floor(num(raw.coins, s.coins, 0, 1e12));
+    s.level = Math.floor(num(raw.level, 1, 1, D.MAX_LEVEL));
+    s.xp = Math.floor(num(raw.xp, 0, 0, 1e9));
+    const st = Math.floor(num(raw.room && raw.room.stage, 0, 0, D.expansions.length - 1));
+    s.room = { stage: st, floor: 'wood', wall: 'cream' };
+    s.owned = { floors: ['wood'], walls: ['cream'] };
+    if (raw.owned) {
+      for (const f of raw.owned.floors || []) if (D.floors[f] && !s.owned.floors.includes(f)) s.owned.floors.push(f);
+      for (const w of raw.owned.walls || []) if (D.walls[w] && !s.owned.walls.includes(w)) s.owned.walls.push(w);
+    }
+    if (raw.room) {
+      if (s.owned.floors.includes(raw.room.floor)) s.room.floor = raw.room.floor;
+      if (s.owned.walls.includes(raw.room.wall)) s.room.wall = raw.room.wall;
+    }
+    // 物件：已知 id、座標在範圍內、不重疊
+    // 已取消的商品（地毯）：擺放中與倉庫裡的都按原價退款
+    let refund = 0;
+    for (const it of Array.isArray(raw.items) ? raw.items : []) if (it && D.LEGACY_REFUND[it.id]) refund += D.LEGACY_REFUND[it.id];
+    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.LEGACY_REFUND[id] && n > 0) refund += D.LEGACY_REFUND[id] * Math.floor(num(n, 0, 0, 9999));
+    s.coins += refund;
+    const exp = D.expansions[st];
+    const cleaned = cleanItems(raw.items, exp);
+    s.items = cleaned.items;
+    s.nextUid = cleaned.nextUid;
+    const taken = cleaned.taken;
+    s.inventory = {};
+    for (const [id, n] of Object.entries(raw.inventory || {})) if (D.furniture[id] && n > 0) s.inventory[id] = Math.floor(num(n, 0, 0, 9999));
+    s.sinkDirty = Math.floor(num(raw.sinkDirty, 0, 0, 1e6));
+    s.day = Math.floor(num(raw.day, 1, 1, 1e6));
+    s.clock = num(raw.clock, D.DAY.defaultOpen * 60, 0, 1439.99);
+    const sc = raw.schedule || {};
+    const open = Math.floor(num(sc.open, D.DAY.defaultOpen, 0, 23));
+    const close = Math.floor(num(sc.close, D.DAY.defaultClose, 1, 24));
+    s.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
+    s.reputation = num(raw.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
+    s.lowDays = Math.floor(num(raw.lowDays, 0, 0, 1e4));
+    const ov = raw.over;
+    s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: ov.reason === 'chain' ? 'chain' : 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
+    // 舊存檔沒有洗碗槽：自動補一個（優先放在靠牆的一排；沒有空位就放進倉庫）
+    if (!s.items.some((i) => i.id === 'sink') && !(s.inventory.sink > 0)) {
+      let spot = null;
+      for (let y = 0; y < exp.h && !spot; y++)
+        for (let x = 0; x < exp.w && !spot; x++) if (!taken.has(x + ',' + y) && !(y === D.DOOR_Y && x <= 1)) spot = { x, y };
+      if (spot) s.items.push({ uid: s.nextUid++, id: 'sink', x: spot.x, y: spot.y, rot: 0 });
+      else s.inventory.sink = 1;
+      s.flags.addedSink = true;
+    }
+    s.dishes = { danbing: { cooked: 0 } };
+    for (const [id, v] of Object.entries(raw.dishes || {})) if (D.dishes[id]) s.dishes[id] = { cooked: Math.floor(num(v && v.cooked, 0, 0, 1e9)) };
+    const hq = raw.hq && typeof raw.hq === 'object' ? raw.hq : null;
+    const { staff, maxId } = cleanStaff(raw.staff);
+    if (staff.length) {
+      fixStaffRoles(staff, hq && hq.gm ? null : true); // 有總經理資料時，掌櫃由後面的整理決定
       s.staff = staff;
       s.nextStaffId = maxId + 1;
-    }
+    } else if (hq && hq.gm && Array.isArray(raw.staff)) s.staff = []; // 名單空了，掌櫃由總經理資料補上
     if (Array.isArray(raw.candidates) && raw.candidates.length) {
       const cs = raw.candidates
         .filter((c) => c && typeof c.name === 'string' && c.look)
@@ -261,12 +463,68 @@
     };
     s.flags = { welcomed: !!(raw.flags && raw.flags.welcomed), addedSink: s.flags.addedSink, sinkToldAt: raw.flags && raw.flags.sinkToldAt ? 1 : 0 };
     s.savedAt = num(raw.savedAt, 0, 0, 1e15);
-    return s;
+    s.syncedMin = 0;
+    // 分店
+    const co = s.company;
+    co.gameMin = num(hq && hq.gameMin, 0, 0, 1e12);
+    for (const rb of Array.isArray(raw.branches) ? raw.branches.slice(0, D.BRANCH.max) : []) {
+      const st = normalizeBranch(rb, co, rng);
+      if (st) {
+        st.syncedMin = Math.min(st.syncedMin, co.gameMin);
+        co.stores.push(st);
+      }
+    }
+    co.nextStoreId = Math.max(Math.floor(num(hq && hq.nextStoreId, 1, 1, 1e6)), ...co.stores.map((x) => x.id + 1));
+    // 玩家的身分：只有一間店時是店掌櫃（員工名單裡的 boss）；有分店之後是總經理（不在任何一間店的名單裡）
+    co.chainDays = Math.floor(num(hq && hq.chainDays, 0, 0, 1e4));
+    const gmRaw = hq && hq.gm && typeof hq.gm === 'object' ? hq.gm : null;
+    const bosses = [];
+    for (const x of co.stores) for (const m of x.staff) if (m.boss) bosses.push([x, m]);
+    if (co.stores.length >= 2) {
+      let gm = gmRaw ? cleanGm(gmRaw) : null;
+      if (!gm && bosses.length) gm = cleanGm(bosses[0][1]);
+      for (const [x, m] of bosses) x.staff = x.staff.filter((r) => r !== m);
+      co.gm = gm || cleanGm({ id: 1, name: '阿福', look: { skin: 1, hair: 0, hairStyle: 0, top: 7, pants: 0 }, speed: 1.15, skill: 1.1 });
+    } else {
+      const main = co.stores[0];
+      let keep = bosses.length ? bosses[0][1] : null;
+      for (const [, m] of bosses) if (m !== keep) m.boss = false;
+      if (!keep) {
+        const gm = gmRaw ? cleanGm(gmRaw) : null;
+        if (gm) {
+          keep = newStaff(gm.id, { ...gm, boss: true, shift: D.DAY.defaultOpen });
+          main.staff.unshift(keep);
+        } else if (main.staff.length) {
+          keep = main.staff[0];
+          keep.boss = true;
+          keep.wage = 0;
+          keep.raise = 0;
+          keep.manager = false;
+          keep.head = false;
+        }
+      }
+      co.gm = null;
+    }
+    co.activeId = co.stores.some((x) => x.id === (hq && hq.activeId)) ? hq.activeId : 0;
+    // 員工編號全公司不重複
+    const allIds = co.stores.flatMap((x) => x.staff.map((m) => m.id)).concat(co.gm ? [co.gm.id] : []);
+    s.nextStaffId = Math.max(s.nextStaffId, ...allIds.map((i) => i + 1));
+    return co.active;
   }
 
   /** 存檔字串（已編碼，見 codec.js）。savedAt 可指定，預設為現在。 */
   function serialize(state, savedAt) {
-    return RC.codec.encode(JSON.stringify({ ...state, v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }));
+    const co = state && state.company;
+    const out = { ...(co ? co.stores[0] : state), v: SAVE_VERSION, savedAt: savedAt != null ? savedAt : Date.now() }; // 主店的平面存檔（含共用欄位）
+    if (co && co.stores.length > 1) {
+      out.hq = { gameMin: co.gameMin, activeId: co.activeId, nextStoreId: co.nextStoreId, gm: co.gm, chainDays: co.chainDays };
+      out.branches = co.stores.slice(1).map((st) => {
+        const b = {};
+        for (const k of STORE_KEYS) b[k] = st[k];
+        return b;
+      });
+    } else if (co) out.hq = { gameMin: co.gameMin, activeId: 0, nextStoreId: co.nextStoreId, gm: co.gm, chainDays: 0 };
+    return RC.codec.encode(JSON.stringify(out));
   }
 
   /**
@@ -362,5 +620,5 @@
     }
   }
 
-  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, dailyWage });
+  const state = (RC.state = { loadStatus: 'none', loadInfo: null, SAVE_KEY, checkVersion, newGame, normalize, serialize, parse, save, load, clear, makeLook, makeCandidate, newStaff, newStore, attach, cleanGm, dailyWage, CORE_KEYS, STORE_KEYS });
 })(typeof globalThis !== 'undefined' ? globalThis : window);

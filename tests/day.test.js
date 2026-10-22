@@ -219,11 +219,54 @@ test('值班店長：Lv.10 才能任命、只能一位、不能是掌櫃；可�
   b.level = 10;
   assert.equal(g.assignManager(a.id).ok, true);
   assert.equal(a.manager, true);
-  assert.equal(g.assignManager(b.id).ok, true, '改任命另一位，前一位自動卸任');
+  assert.equal(g.assignManager(b.id).ok, true, '可以再任命第二位');
+  assert.equal(a.manager && b.manager, true, '每間店最多兩位值班店長');
+  assert.equal(g.assignManager(a.id).ok, false, '已經是店長了');
+  assert.equal(g.clearManager(a.id).ok, true, '可以指定解除哪一位');
   assert.equal(a.manager, false);
   assert.equal(b.manager, true);
   assert.equal(g.clearManager().ok, true);
   assert.equal(b.manager, false);
+});
+
+test('雙店長制：正店長 1 位（Lv.10）＋副店長 1 位（Lv.8）；第三位要先解除', () => {
+  const g = mk(14);
+  hire(g, 3);
+  const [, x, y, z] = g.s.staff;
+  [x, y, z].forEach((m) => (m.level = 10));
+  assert.equal(g.assignManager(x.id).ok, true);
+  assert.equal(x.head, true, '第一位預設是正店長');
+  assert.equal(g.assignManager(y.id).ok, true);
+  assert.equal(y.head, false, '第二位是副店長');
+  const r = g.assignManager(z.id);
+  assert.equal(r.ok, false);
+  assert.ok(r.msg.includes('已經有'), r.msg);
+  g.clearManager(x.id);
+  assert.equal(g.assignManager(z.id, 'head').ok, true, '正店長空缺，可以任命新的');
+  assert.equal(z.head, true);
+  assert.equal(g.assignManager(x.id, 'head').ok, false, '已經有正店長');
+});
+
+test('店長等級門檻：副店長 Lv.8、正店長 Lv.10；Lv.8～9 的副店長沒有結帳權限，Lv.10 以上才有', () => {
+  const g = mk(16);
+  hire(g, 3);
+  const [, a, b, c] = g.s.staff;
+  a.level = 7;
+  b.level = 9;
+  c.level = 10;
+  assert.equal(g.assignManager(a.id, 'deputy').ok, false, 'Lv.7 不夠');
+  assert.equal(g.assignManager(b.id, 'head').ok, false, 'Lv.9 當不了正店長');
+  assert.equal(g.assignManager(b.id, 'deputy').ok, true, 'Lv.9 可以當副店長');
+  assert.equal(g.canCollect(b), false, 'Lv.9 的副店長不能結帳');
+  b.level = 10;
+  assert.equal(g.canCollect(b), true, '升到 Lv.10 就能結帳');
+  assert.equal(g.assignManager(c.id, 'head').ok, true);
+  assert.equal(g.canCollect(c), true, '正店長有結帳權限');
+  assert.equal(g.canCollect(a), false, '一般員工不能結帳');
+  assert.equal(g.canCollect(g.s.staff[0]), true, '店掌櫃能結帳');
+  const cov = g.coverage();
+  const h = g.s.schedule.open;
+  assert.ok(cov.payers[h] >= 1);
 });
 
 test('掌櫃下班後，值班店長接手結帳；兩人都不在就很快自助結帳', () => {
@@ -272,7 +315,7 @@ test('沒有人能收款時，客人 12 秒後自助結帳（沒有小費）', (
   assert.equal(selfPaid, 0, '自助結帳沒有小費');
 });
 
-test('員工等級上限 15；升到 10 級時提示可任命值班店長；每級技術 +0.03、速度 +0.02', () => {
+test('員工等級上限 15；升到 8 級可當副店長、10 級可當正店長；每級技術 +0.03、速度 +0.02', () => {
   const g = mk(15);
   hire(g, 1);
   const rec = g.s.staff[1];
@@ -286,7 +329,7 @@ test('員工等級上限 15；升到 10 級時提示可任命值班店長；每�
   const sk = rec.skill;
   g.gainStaffXp(rec);
   assert.equal(rec.level, 10);
-  assert.ok(toasts.some((t) => t.includes('值班店長')));
+  assert.ok(toasts.some((t) => t.includes('正店長')));
   assert.ok(Math.abs(rec.speed - sp - 0.02) < 1e-9 && Math.abs(rec.skill - sk - 0.03) < 1e-9);
   rec.xp = 99999;
   for (let i = 0; i < 10; i++) g.gainStaffXp(rec);

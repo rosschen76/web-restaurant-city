@@ -35,6 +35,16 @@
       this.ev = new Emitter();
       this.speed = state.settings.speed || 1;
       this.pauseReasons = new Set(); // 暫停的原因可以疊加：'user' 玩家按暫停、'edit' 裝潢中、'settings' 設定面板開著
+      // dayMode=false：不分日夜、不排班（所有人隨時待命、永遠營業）；測試用，正式遊戲一律開啟
+      this.dayMode = opts.dayMode !== false;
+      // headless：沒有玩家在的店，由結算程式暫時跑起來補算（不推進公司的時間、客流打折）
+      this.headless = !!opts.headless;
+      this.initRuntime();
+    }
+
+    /** 載入（或重新載入）一間店的執行期狀態：客人、員工、桌椅預約…都從這間店的存檔資料重新開始。 */
+    initRuntime() {
+      const state = this.s;
       this.customers = [];
       this.crew = [];
       this.nextCid = 1;
@@ -47,10 +57,9 @@
       this.lastPartySize = 1;
       this.quiet = false; // 離線快轉時不發事件
       this.dirty = new Map(); // table uid -> {x,y,plates,claimedBy} 客人離席後桌上的餐具
-      // dayMode=false：不分日夜、不排班（所有人隨時待命、永遠營業）；測試用，正式遊戲一律開啟
-      this.dayMode = opts.dayMode !== false;
       this.payerOn = true; // 目前有沒有人能替客人結帳（掌櫃或值班店長在班）
       this.offline = false; // 離線快轉中：不累計風評谷底天數、不會觸發遊戲終止
+      this.pendingClose = null; // 分店風評崩壞：等這一輪模擬結束後再關店
       this.dayMark = { served: state.stats.served, earned: state.stats.earned };
       this.sinkBusy = new Map(); // sink uid -> 正在洗碗的員工 id
       this.spawnTimer = 3;
@@ -59,6 +68,13 @@
       for (const rec of state.staff) this.addCrew(rec);
       this.wasOpen = this.isOpen();
       this.updateDuty();
+    }
+
+    /** 換到另一間店（玩家搬過去）。UI 與繪圖繼續使用同一個 Game，只是資料換成那間店。 */
+    loadStore(store) {
+      this.s = store;
+      this.initRuntime();
+      this.changed();
     }
 
     /** 只要有任何一個暫停原因，遊戲時間就完全凍結。 */
@@ -134,8 +150,8 @@
     }
 
     /** 魅力值（遞減計算）→ 星級；另算出收銀機、冰箱效果。 */
-    recalc() {
-      const s = this.s;
+    /** 一間店的魅力：每種家具前 3 個全額、4～6 個半額、之後 2 成，加上地板與牆壁 */
+    static appealOf(s) {
       const counts = {};
       for (const it of s.items) counts[it.id] = (counts[it.id] || 0) + 1;
       let appeal = 0;
@@ -144,6 +160,12 @@
         for (let k = 1; k <= n; k++) appeal += a * (k <= 3 ? 1 : k <= 6 ? 0.5 : 0.2);
       }
       appeal += D.floors[s.room.floor].appeal + D.walls[s.room.wall].appeal;
+      return { appeal, counts };
+    }
+
+    recalc() {
+      const s = this.s;
+      const { appeal, counts } = Game.appealOf(s);
       this.appeal = appeal;
       this.stars = D.starsForAppeal(appeal);
       this.hasRegister = !!counts.register;
@@ -255,9 +277,18 @@
       const people = D.maxStaffForLevel(lv) + 1; // 含店掌櫃
       const appeal = F.appealMin + F.appealSpan * Math.min(1, this.appeal / F.appealFull);
       const base = labor / people / F.load / appeal;
-      // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）
-      const rep = Math.max(0.3, 1 + REP.arrivalEffect * this.s.reputation);
-      return (clamp(base, F.minGap, F.maxGap) * this.rng.range(0.7, 1.3)) / rep;
+      // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）；有分店時，品牌聲譽（各店風評的平均）也算一半
+      const rep = Math.max(0.3, 1 + REP.arrivalEffect * this.effectiveRep());
+      const away = this.headless ? D.BRANCH.awayFlow : 1; // 玩家不在的店，客流打折
+      return (clamp(base, F.minGap, F.maxGap) * this.rng.range(0.7, 1.3)) / rep / away;
+    }
+
+    /** 影響客流的風評：單店就是自己的風評；有分店時，自己與品牌聲譽（各店平均）各占一半 */
+    effectiveRep() {
+      const co = this.s.company;
+      if (!co || co.stores.length < 2) return this.s.reputation;
+      const brand = co.stores.reduce((n, x) => n + x.reputation, 0) / co.stores.length;
+      return (this.s.reputation + brand) / 2;
     }
 
     /** 魅力（裝飾、桌椅）占滿的比例 0~1：環境越好，客人越有耐心、小費越多 */
@@ -391,7 +422,7 @@
             if (m.state === 'idle' || m.state === 'rest' || abs - m.endingSince >= 30) this.clockOut(m, abs);
           }
         } else if (want) this.clockIn(m);
-        if (m.onDuty && !m.ending && (m.boss || m.rec.manager)) payer = true;
+        if (m.onDuty && !m.ending && this.canCollect(m.rec)) payer = true;
       }
       this.payerOn = payer;
     }
@@ -408,6 +439,7 @@
       const chores = (this.dirty.size > 0 || this.s.sinkDirty > 0) && this.crew.some((m) => m.onDuty);
       const rate = (60 / DAYC.hourReal) * (quiet && !chores ? DAYC.nightFast : 1);
       const dm = dt * rate;
+      if (!this.headless && this.s.company) this.s.company.gameMin += dm; // 公司的時間只由玩家所在的店推進
       this.s.clock += dm;
       if (this.s.clock >= 1440) {
         this.s.clock -= 1440;
@@ -456,7 +488,12 @@
         if (s.lowDays >= REP.loseDays) this.endGame('reputation');
         else if (REP.warnDays.includes(s.lowDays)) this.toast(`⚠ 風評已連續 ${s.lowDays} 天跌到谷底，滿 ${REP.loseDays} 天餐廳就要倒閉了！`, 'bad');
       }
+      if (this.ensureManagers) this.ensureManagers(s); // 沒有掌櫃的店，店長缺額自動補上（Lv.10 以上、綜合能力最強）
       if (s.schedule.auto) this.autoSchedule();
+      if (!this.headless && !this.offline && this.settleDormant) {
+        this.settleDormant(); // 沒有被檢視的店，每天午夜補算
+        if (this.checkChain) this.checkChain();
+      }
       this.changed();
     }
 
@@ -488,9 +525,21 @@
       return { paid, quits: quits.length };
     }
 
+    /** 遊戲是否已經結束：只有主店倒閉才算（分店倒閉只是關店）；玩家在分店時，主店也可能在背景倒閉 */
+    isOver() {
+      const co = this.s.company;
+      return !!(co ? co.stores[0].over : this.s.over);
+    }
+
     endGame(reason) {
       const s = this.s;
-      if (s.over) return;
+      if (s.over || this.pendingClose != null) return;
+      if (s.kind === 'branch') {
+        // 分店風評崩壞：只是這間分店關門，不是整場遊戲結束（等這一輪模擬結束後再關，免得模擬到一半換店）
+        this.pendingClose = s.id;
+        this.emit('branchover', { id: s.id, name: s.name, day: s.day });
+        return;
+      }
       s.over = { day: s.day, reason, served: s.stats.served, earned: s.stats.earned, level: s.level };
       this.emit('gameover', s.over);
       this.changed();
@@ -875,7 +924,7 @@
       if (this.hasRegister) return; // 有收銀機：客人自助結帳，掌櫃不用跑腿
       // 能收款的人：在班的店掌櫃與值班店長。煮到一半或上菜中的不打斷
       const free = ['idle', 'to_customer', 'taking', 'wait_stove', 'wait_plate', 'to_stove', 'to_clean', 'to_wash', 'washing'];
-      const payers = this.crew.filter((m) => m.onDuty && !m.ending && (m.boss || m.rec.manager) && free.includes(m.state));
+      const payers = this.crew.filter((m) => m.onDuty && !m.ending && this.canCollect(m.rec) && free.includes(m.state));
       if (!payers.length) return;
       const waiting = this.customers.filter((c) => c.state === 'wait_pay' && c.payBy == null);
       if (!waiting.length) return;
@@ -941,7 +990,7 @@
     /** 有更急的工作（客人等點餐、等結帳、候位等桌子）時，洗碗先放一邊。 */
     urgentWork(m) {
       if (this.customers.some((c) => c.state === 'wait_order' && c.claimedBy == null)) return true;
-      if ((m.boss || m.rec.manager) && !this.hasRegister && this.customers.some((c) => c.state === 'wait_pay' && c.payBy == null)) return true;
+      if (this.canCollect(m.rec) && !this.hasRegister && this.customers.some((c) => c.state === 'wait_pay' && c.payBy == null)) return true;
       return this.queue.length > 0 && this.dirty.size > 0;
     }
 
@@ -1269,7 +1318,7 @@
         rec.level++;
         rec.skill = Math.round((rec.skill + 0.03) * 100) / 100;
         rec.speed = Math.round((rec.speed + 0.02) * 100) / 100;
-        this.toast(rec.name + ' 升到 Lv.' + rec.level + (rec.level === DAYC.managerLevel && !rec.boss ? '！可以任命為值班店長了' : '！'), 'good');
+        this.toast(rec.name + ' 升到 Lv.' + rec.level + (!rec.boss && rec.level === DAYC.deputyLevel ? '！可以擔任副店長了' : !rec.boss && rec.level === DAYC.managerLevel ? '！可以擔任正店長，副店長也有結帳權限了' : '！'), 'good');
         this.emit('sfx', 'levelup');
       }
     }
@@ -1286,20 +1335,21 @@
     /* ───────── 主迴圈 ───────── */
 
     update(dtReal) {
-      if (this.paused || this.s.over) return;
+      if (this.paused || this.isOver()) return;
       let left = Math.min(dtReal, 0.5) * this.speed;
-      while (left > 1e-6) {
+      while (left > 1e-6 && this.pendingClose == null) {
         const h = Math.min(left, 0.1);
         this.step(h);
         left -= h;
       }
+      if (this.pendingClose != null && !this.headless && this.closePendingBranch) this.closePendingBranch();
     }
 
     step(dt) {
       this.s.stats.playTime += dt;
       if (this.dayMode) {
         this.advanceClock(dt);
-        if (this.s.over) return; // 這一步剛好結束了遊戲
+        if (this.isOver()) return; // 這一步剛好結束了遊戲
         this.updateDuty();
       }
       this.spawnTimer -= dt * this.demand(); // 倍率高的時段倒數得快，客人上門更勤
@@ -1351,7 +1401,7 @@
      */
     catchUp(awaySeconds) {
       const O = D.OFFLINE;
-      if (this.paused || this.s.over || !isFinite(awaySeconds) || awaySeconds < O.minAway) return null; // 裝潢暫停中時間不流動；已終止的遊戲不再進行
+      if (this.paused || this.isOver() || !isFinite(awaySeconds) || awaySeconds < O.minAway) return null; // 裝潢暫停中時間不流動；已終止的遊戲不再進行
       const s = this.s;
       const real = Math.min(awaySeconds, O.maxHours * 3600);
       const simulated = real * O.efficiency;
@@ -1369,6 +1419,7 @@
       this.dayMark = { served: s.stats.served, earned: s.stats.earned };
       let reward = 0;
       for (let lv = before.level + 1; lv <= s.level; lv++) reward += D.levelReward(lv);
+      if (this.settleDormant) this.settleDormant(); // 離開期間，沒有玩家的分店也一起補算
       this.changed();
       return {
         show: awaySeconds >= O.minReport,
@@ -1548,6 +1599,19 @@
       return this.done();
     }
 
+    /** 員工名單（s.staff）被外部改動（調動、離職…）後，讓執行中的員工跟著同步。 */
+    syncCrew() {
+      for (const m of [...this.crew]) {
+        if (!this.s.staff.includes(m.rec)) {
+          this.abortJob(m);
+          this.crew = this.crew.filter((x) => x !== m);
+        }
+      }
+      for (const rec of this.s.staff) if (!this.crew.some((m) => m.rec === rec)) this.addCrew(rec);
+      this.updateDuty();
+      this.changed();
+    }
+
     fire(id) {
       const s = this.s;
       const m = this.crewById(id);
@@ -1635,7 +1699,7 @@
       for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - SH)) / (k - 1)));
       const slotOrder = k === 1 ? [0] : [0, k - 1, ...Array.from({ length: Math.max(0, k - 2) }, (_, i) => i + 1)];
       // 掌櫃、值班店長在前，其餘依等級由高到低
-      const rank = (m) => (m.boss ? 2 : m.manager ? 1 : 0);
+      const rank = (m) => (m.boss ? 3 : m.head ? 2 : m.manager ? 1 : 0); // 掌櫃／正店長開店班，副店長收店班
       const people = [...s.staff].sort((a, b) => rank(b) - rank(a) || b.level - a.level || a.id - b.id);
       const count = Array(24).fill(0); // 各鐘點已經排了幾個人
       const hoursOf = (st) => {
@@ -1707,39 +1771,72 @@
         for (const rec of s.staff) {
           if ((((h - rec.shift) % 24) + 24) % 24 < DAYC.shiftHours) {
             staff[h]++;
-            if (rec.boss || rec.manager) payers[h]++;
+            if (this.canCollect(rec)) payers[h]++;
           }
         }
       }
       return { staff, payers, open };
     }
 
-    assignManager(id) {
+    /** 有沒有結帳權限：店掌櫃、正店長，以及 Lv.10 以上的副店長（Lv.8～9 的副店長只能管理，不能結帳） */
+    canCollect(rec) {
+      return !!rec.boss || !!rec.head || (!!rec.manager && rec.level >= DAYC.managerLevel);
+    }
+
+    /**
+     * 任命店長（雙店長制：正店長 1 位＋副店長 1 位）。
+     * post：'head' 正店長（要 Lv.10 以上）、'deputy' 副店長（要 Lv.8 以上）；不指定時，正店長空缺且夠格就當正店長，否則當副店長。
+     */
+    assignManager(id, post) {
       const s = this.s;
       const rec = s.staff.find((m) => m.id === id);
       if (!rec) return this.fail('找不到員工');
       if (rec.boss) return this.fail('店掌櫃本來就能結帳');
-      if (rec.level < DAYC.managerLevel) return this.fail(`要達到 Lv.${DAYC.managerLevel} 才能任命值班店長`);
-      for (const m of s.staff) m.manager = false;
-      rec.manager = true;
+      if (rec.manager) return this.fail(rec.head ? '已經是正店長了' : '已經是副店長了');
+      const hasHead = s.staff.some((m) => m.head);
+      const hasDeputy = s.staff.some((m) => m.manager && !m.head);
+      if (!post) post = !hasHead && rec.level >= DAYC.managerLevel ? 'head' : 'deputy';
+      if (post === 'head') {
+        if (rec.level < DAYC.managerLevel) return this.fail(`正店長要 Lv.${DAYC.managerLevel} 以上`);
+        if (hasHead) return this.fail('已經有正店長了，先解除他');
+        rec.manager = true;
+        rec.head = true;
+      } else {
+        if (rec.level < DAYC.deputyLevel) return this.fail(`副店長要 Lv.${DAYC.deputyLevel} 以上`);
+        if (hasDeputy) return this.fail('已經有副店長了，先解除他');
+        rec.manager = true;
+        rec.head = false;
+      }
       if (s.schedule.auto) this.autoSchedule();
       return this.done();
     }
 
-    clearManager() {
-      const rec = this.s.staff.find((m) => m.manager);
-      if (!rec) return this.fail('目前沒有值班店長');
+    /** 解除店長職位；不指定 id 就解除第一位（先副店長） */
+    clearManager(id) {
+      const mgrs = this.s.staff.filter((m) => m.manager).sort((a, b) => (a.head ? 1 : 0) - (b.head ? 1 : 0));
+      const rec = id != null ? mgrs.find((m) => m.id === id) : mgrs[0];
+      if (!rec) return this.fail('目前沒有店長');
       rec.manager = false;
+      rec.head = false;
       if (this.s.schedule.auto) this.autoSchedule();
       return this.done();
+    }
+
+    /** 玩家（店掌櫃，有分店之後是總經理）的名字 */
+    playerName() {
+      const boss = this.s.staff.find((m) => m.boss);
+      const co = this.s.company;
+      return boss ? boss.name : co && co.gm ? co.gm.name : '';
     }
 
     renameBoss(name) {
       name = String(name || '').trim().slice(0, 8);
       if (!name) return this.fail('名字不能是空的');
       const boss = this.s.staff.find((m) => m.boss);
-      if (!boss) return this.fail('找不到店掌櫃');
-      boss.name = name;
+      const co = this.s.company;
+      if (boss) boss.name = name;
+      else if (co && co.gm) co.gm.name = name;
+      else return this.fail('找不到店掌櫃');
       return this.done();
     }
 
@@ -1749,20 +1846,26 @@
       return this.s.items.filter((i) => cats.includes(D.furniture[i.id].cat)).length;
     }
 
+    /** 全公司（主店＋分店）的累計統計 */
+    companyStat(key) {
+      const co = this.s.company;
+      return (co ? co.stores : [this.s]).reduce((n, x) => n + x.stats[key], 0);
+    }
+
     questProgress(q) {
       const s = this.s;
       switch (q.type) {
-        case 'collect': return s.stats.collects;
+        case 'collect': return this.companyStat('collects');
         case 'chair': return this.countCat('chair');
         case 'table': return this.countCat('table');
         case 'stove': return this.countCat('stove');
         case 'decor': return this.countCat('decor');
-        case 'serve': return s.stats.served;
+        case 'serve': return this.companyStat('served');
         case 'learn': return Object.keys(s.dishes).length;
         case 'staff': return s.staff.length;
         case 'level': return s.level;
         case 'stars': return this.stars;
-        case 'earn': return s.stats.earned;
+        case 'earn': return this.companyStat('earned');
         case 'expand': return s.room.stage;
         case 'mastery': return Math.max(0, ...Object.values(s.dishes).map((d) => d.cooked));
         default: return 0;

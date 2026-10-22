@@ -184,7 +184,9 @@
     defaultClose: 17,
     shiftHours: 8, // 友善職場：每位員工每天最多上班 8 小時（硬性規定，不能超時）
     restFullHours: 2, // 離開崗位休息滿 2 小時，體力自動恢復
-    managerLevel: 10, // 員工達到這個等級，才能任命為值班店長
+    managerLevel: 10, // 正店長的等級門檻；副店長要達到這個等級才有結帳權限
+    deputyLevel: 8, // 副店長的等級門檻（Lv.8 就能擔任，但 Lv.10 才能結帳）
+    maxManagers: 2, // 每間店的店長編制：正店長 1 位＋副店長 1 位（雙店長制）
     seniorLevel: 5, // 自動排班：達到這個等級算資深，優先補尖峰；以下的資淺員工分成 2～3 個時段上班
     closeOvertimeMin: 120, // 打烊後還有客人或餐具沒收洗完，在班的員工留下收店，最多加班這麼久（分鐘）
   };
@@ -192,7 +194,7 @@
   /* ───────── 遊戲版次 ───────── */
   // 存檔會記下產生它的版次。版次 1 = 日夜系統之前的所有版本；之後每次改動存檔結構或平衡的大更新 +1。
   // 存檔版次比目前低 maxGap 以上（差太多）或比目前新，就不讀取，只能重新開局。
-  const GAME_VERSION = { current: 3, maxGap: 2 };
+  const GAME_VERSION = { current: 4, maxGap: 3 };
 
   /* ───────── 客流：尖峰與離峰 ───────── */
   // 每個整點的客流倍率（1 = 平常）。午餐、晚餐是尖峰，下午與深夜是離峰；兩個整點之間線性過渡。
@@ -230,6 +232,23 @@
     admitMin: 3,
     patienceBonus: 0.3, // 環境（魅力）越好，客人越有耐心：魅力達 appealFull 時耐心 +30%
     tipBonus: 0.5, // 魅力達 appealFull 時小費 +50%
+  };
+
+  /* ───────── 分店 ─────────
+   * 主店發展到上限（最大的擴建＋三星）後，可以指派一位 Lv.10 以上的員工當店長，去開分店。
+   * 每間店都是獨立的餐廳（自己的格局、員工、風評、魅力）；金幣、玩家等級、菜單、倉庫、任務是整個公司共用。
+   * 玩家同一時間只待在一間店；沒有玩家的店由店長主持，採「懶惰結算」：切換店面與每天午夜才補算。 */
+  const BRANCH = {
+    max: 3, // 最多幾間分店
+    cost: [300000, 600000, 1200000], // 第 1、2、3 間分店的開店資金
+    awayFlow: 0.8, // 沒有被玩家（總經理）檢視的店，客流只有 80%
+    settleMaxDays: 7, // 一次最多補算幾個遊戲日（再久就不補了，免得卡住）
+    nameMax: 12,
+    chainRep: -6, // 連鎖崩壞：所有分店的風評都低於這個值……
+    chainDays: 10, // ……連續這麼多天，視同主店倒閉、遊戲終止（至少要有 chainMinBranches 間分店才適用）
+    chainMinBranches: 2,
+    severanceDays: 15, // 資遣費：日薪的 15 倍
+    warehouseCap: 150, // 關店時，倉庫最多收到這個件數；放不下的家具按半價賣掉
   };
 
   /* ───────── 風評 ───────── */
@@ -283,6 +302,6 @@
     maxStaffForLevel, RAISE, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, BRANCH, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

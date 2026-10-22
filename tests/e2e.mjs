@@ -487,6 +487,73 @@ await scenario('加薪：員工面板有 0～20% 滑桿，調整後日薪與能�
   assert.ok(txt.includes('＋20%') && txt.includes('加薪加成'), txt);
 });
 
+await scenario('分店：開分店（總經理＋雙店長制）、檢視各店、存檔後重載、主動關店（資遣費）', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  // 主店發展到上限：18×18、三星、有錢；員工 4 位：兩位 Lv.10、兩位 Lv.8
+  const ids = await G(page, () => {
+    const g = window.__game.game;
+    const s = g.s;
+    s.coins = 5e6; s.level = 40; s.room.stage = window.RC.data.expansions.length - 1;
+    for (const [id, n] of [['piano', 10], ['statue', 10], ['jukebox', 10], ['fishtank', 6]]) for (let i = 0; i < n; i++) s.items.push({ uid: s.nextUid++, id, x: 99, y: 99, rot: 0 });
+    g.rebuild();
+    for (let i = 0; i < 4; i++) g.hire(i % 3);
+    const lv = [10, 10, 8, 8];
+    s.staff.slice(1).forEach((m, i) => (m.level = lv[i]));
+    g.changed();
+    return s.staff.slice(1).map((m) => m.id);
+  });
+  await page.waitForSelector('#btn-company:not([hidden])');
+  assert.equal(await page.locator('#stores').isHidden(), true, '只有主店時不顯示店面切換列');
+  await page.click('#btn-company');
+  let txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('店掌櫃') && txt.includes('雙店長制') && txt.includes('開店資金'), txt);
+  await page.selectOption('[data-co=head]', String(ids[0]));
+  await page.selectOption('[data-co=deputy]', String(ids[2]));
+  await page.fill('[data-co=name]', '東區店');
+  assert.ok(!(await page.locator('[data-act=open-branch]').isDisabled()), '條件都滿足，可以開設');
+  await page.click('[data-act=open-branch]');
+  await page.waitForFunction(() => window.__game.game.stores().length === 2);
+  assert.equal(await G(page, () => !!window.__game.game.s.company.gm), true, '玩家成為總經理');
+  assert.equal(await G(page, () => window.__game.game.stores().some((x) => x.staff.some((m) => m.boss))), false, '任何一間店都沒有掌櫃');
+  txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('總經理・你') && txt.includes('正店長：') && txt.includes('副店長：'), txt);
+  await page.click('.win [data-act=close]');
+  await page.waitForSelector('#stores:not([hidden])');
+  const chips = await page.locator('.store-chip').allInnerTexts();
+  assert.ok(chips.length === 2 && chips[0].includes('主店') && chips[1].includes('東區店'), chips.join('|'));
+  // 檢視分店
+  await page.click('.store-chip >> nth=1');
+  await page.waitForFunction(() => window.__game.game.s.kind === 'branch');
+  await page.waitForFunction(() => document.querySelector('#rname').textContent.includes('東區店'), null, { timeout: 4000 });
+  assert.equal(await G(page, () => window.__game.game.crew.some((m) => m.boss)), false, '分店沒有掌櫃');
+  assert.equal(await G(page, () => window.__game.game.crew.filter((m) => m.rec.manager).length), 2, '分店有正、副店長');
+  // 存檔後重載：仍然在檢視分店，仍是總經理
+  await G(page, () => window.RC.state.save(window.__game.game.s));
+  await page.reload();
+  await page.waitForSelector('#game');
+  await page.waitForFunction(() => window.__game && window.__game.game.s.kind === 'branch');
+  assert.equal(await G(page, () => window.__game.game.stores().length), 2);
+  assert.equal(await G(page, () => !!window.__game.game.s.company.gm), true);
+  // 回主店，主動關閉分店
+  await page.click('.store-chip >> nth=0');
+  await page.waitForFunction(() => window.__game.game.s.kind === 'main');
+  await page.click('#btn-company');
+  await page.click('[data-act=close-branch]');
+  txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('關閉分店') && txt.includes('資遣費') && txt.includes('倉庫'), txt);
+  // 兩位店長資遣：資遣費合計要大於 0
+  await page.selectOption('[data-close-staff] >> nth=0', 'fire');
+  const sev = await page.locator('#sev-total').innerText();
+  assert.ok(+sev.replace(/[^0-9]/g, '') > 0, '資遣費合計 ' + sev);
+  const coins0 = await G(page, () => window.__game.game.s.coins);
+  await page.click('[data-act=close-branch-ok]');
+  await page.waitForFunction(() => window.__game.game.stores().length === 1);
+  assert.ok((await G(page, () => window.__game.game.s.coins)) < coins0, '扣了資遣費');
+  assert.equal(await G(page, () => window.__game.game.s.staff.some((m) => m.boss)), true, '分店都關了，回主店當店掌櫃');
+  const overflow = await G(page, () => document.documentElement.scrollWidth > window.innerWidth);
+  assert.equal(overflow, false);
+});
+
 await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => { const g = window.__game.game; g.s.reputation = -10; g.s.lowDays = 14; g.s.clock = 1439.5; });
