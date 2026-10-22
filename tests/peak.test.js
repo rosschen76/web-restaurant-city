@@ -153,3 +153,22 @@ test('自動排班：結果固定（同樣的人手與營業時間排出同一�
   a.autoSchedule();
   assert.deepEqual(a.s.staff.map((m) => m.shift), before);
 });
+
+test('自動排班：在班人數依客流比例分配——早上、午後也有人，不會全部擠到午餐尖峰的起點（營業 8～21 點、14 位員工）', () => {
+  const g = staffed([15, 14, 9, 9, 10, 9, 9, 10, 9, 7, 5, 4, 4, 4]);
+  g.setBusinessHours(8, 21);
+  g.autoSchedule();
+  const cov = g.coverage().staff;
+  const hours = [];
+  for (let h = 8; h < 21; h++) hours.push(h);
+  // 每個營業鐘點都有足夠的人（原本早上只剩 2 位）
+  for (const h of hours) assert.ok(cov[h] >= 4, `${h}:00 只有 ${cov[h]} 位在班：${hours.map((x) => cov[x])}`);
+  // 沒有任何一個起點擠了超過 4 成的人
+  const starts = {};
+  for (const m of g.s.staff) starts[m.shift] = (starts[m.shift] || 0) + 1;
+  assert.ok(Math.max(...Object.values(starts)) <= Math.ceil(g.s.staff.length * 0.4), JSON.stringify(starts));
+  // 午餐與晚餐尖峰人手最多（14 位員工、8 小時的班：尖峰都有 8 位以上）
+  for (const h of [12, 13, 18, 19]) assert.ok(cov[h] >= 8, `${h}:00 尖峰只有 ${cov[h]} 位`);
+  // 最缺人的鐘點也不會比最擠的少太多（原本 2 對 14）
+  assert.ok(Math.min(...hours.map((h) => cov[h])) * 3 >= Math.max(...hours.map((h) => cov[h])), `最少 ${Math.min(...hours.map((h) => cov[h]))}、最多 ${Math.max(...hours.map((h) => cov[h]))}`);
+});

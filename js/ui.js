@@ -243,7 +243,7 @@
       if (!r) return head + '。';
       switch (r.code) {
         case 'admit':
-          return `${head}，店裡還有空位，但出餐忙不過來：在班員工 ${r.staff} 位，同時最多照顧 ${r.cap} 位客人（目前 ${r.pending} 位在等點餐或上菜）。這個時段多排幾位員工（員工 → 排班），候位的客人才進得來。`;
+          return `${head}，店裡還有空位，但出餐忙不過來：在班員工 ${r.staff} / ${r.total} 位，同時最多照顧 ${r.cap} 位客人（目前 ${r.pending} 位在等點餐或上菜）。${r.staff * 2 <= r.total ? `還有 ${r.total - r.staff} 位員工沒在上班，到「員工 → 排班」把班排到這個時段（或開啟自動排班）。` : '這個時段多排幾位員工（員工 → 排班），或把爐灶、洗碗槽移近座位，減少員工來回走動。'}`;
         case 'dirty':
           return `${head}：${r.dirty} 張空桌上的餐具還沒收，在班員工 ${r.staff} 位忙不過來。多排幾位員工，或多雇人幫忙收桌子。`;
         case 'reserved':
