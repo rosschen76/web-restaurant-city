@@ -27,11 +27,17 @@
     return { name, look: makeLook(rng), speed, skill };
   }
 
-  /** 日薪：依雇用當下的人數（含掌櫃）決定基本薪資，能力越強越貴；店掌櫃不領薪水 */
-  function dailyWage(cand, staffCount) {
-    const base = D.WAGE_BASE[Math.min(staffCount, D.WAGE_BASE.length - 1)];
-    const q = (cand.speed + cand.skill) / 2;
-    return Math.round((base * q * q) / 5) * 5;
+  /**
+   * 基本日薪（還沒加薪）：只看員工本身——入職時的能力與目前的資歷（等級），和第幾個被雇用無關。
+   * 升級會讓速度／技術各 +0.02／+0.03，這裡先扣掉成長，免得「能力」與「資歷」重複計價。店掌櫃不領薪水。
+   */
+  function dailyWage(m) {
+    if (m.boss) return 0;
+    const lv = Math.max(1, m.level || 1);
+    const q = (m.speed - 0.02 * (lv - 1) + (m.skill - 0.03 * (lv - 1))) / 2;
+    const W = D.WAGE;
+    const senior = 1 + W.seniorA * Math.pow(lv - 1, W.seniorP);
+    return Math.max(5, Math.round((W.base * q * q * senior) / 5) * 5);
   }
 
   function newStaff(id, cand) {
@@ -59,7 +65,7 @@
    * 每間店只有自己的欄位（格局、員工、風評…）。店面物件用存取器把共用欄位接到公司層，
    * 所以 s.coins、s.level 這些既有寫法完全不用改；JSON.stringify(店面) 仍會得到「單店的平面存檔」。 */
   const CORE_KEYS = ['v', 'coins', 'xp', 'level', 'owned', 'inventory', 'dishes', 'quest', 'nextStaffId', 'settings', 'flags', 'savedAt'];
-  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
+  const STORE_KEYS = ['id', 'kind', 'name', 'room', 'items', 'nextUid', 'staff', 'candidates', 'schedule', 'reputation', 'lowDays', 'welfare', 'bonus', 'morale', 'lowMorale', 'over', 'stats', 'sinkDirty', 'day', 'clock', 'syncedMin', 'report'];
 
   /** 把店面接上公司：共用欄位改成存取器（寫入公司層）。 */
   function attach(st, co) {
@@ -131,6 +137,10 @@
       schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
       reputation: 0,
       lowDays: 0,
+      welfare: D.MORALE.welfareDefault,
+      bonus: 0,
+      morale: D.MORALE.start,
+      lowMorale: 0,
       over: null,
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       sinkDirty: 0,
@@ -180,6 +190,10 @@
       schedule: { open: D.DAY.defaultOpen, close: D.DAY.defaultClose, auto: true },
       reputation: 0,
       lowDays: 0, // 風評連續停在谷底的天數
+      welfare: D.MORALE.welfareDefault, // 福利金：薪資總額的百分比
+      bonus: 0, // 分紅：當天盈餘的百分比
+      morale: D.MORALE.start, // 員工士氣 0～100
+      lowMorale: 0, // 士氣連續過低的天數
       over: null, // 遊戲終止資訊
       stats: { served: 0, angry: 0, walkouts: 0, earned: 0, collects: 0, tips: 0, playTime: 0 },
       settings: { sound: true, music: true, sfxVol: 0.8, musicVol: 0.7, speed: 1 },
@@ -290,11 +304,20 @@
         else m.manager = false;
       }
     }
-    // 舊存檔的員工是一次買斷的：改成領日薪，依能力與到職順序補上（掌櫃不領薪水）
-    staff.forEach((m, i) => {
-      m.wage = m.boss ? 0 : m.wage >= 0 ? m.wage : dailyWage(m, i);
+    // 日薪只看員工本身（能力與資歷），存檔裡舊的「依到職順序」日薪一律重算（掌櫃不領薪水）
+    staff.forEach((m) => {
+      m.wage = dailyWage(m);
       if (m.boss) m.raise = 0; // 店掌櫃不領薪水，也沒有加薪
     });
+  }
+
+  /** 福利金、分紅、士氣（舊存檔沒有就用預設值） */
+  function cleanMorale(dst, raw) {
+    const M = D.MORALE;
+    dst.welfare = Math.floor(num(raw.welfare, M.welfareDefault, 0, M.welfareMax));
+    dst.bonus = Math.floor(num(raw.bonus, 0, 0, M.bonusMax));
+    dst.morale = num(raw.morale, M.start, 0, 100);
+    dst.lowMorale = Math.floor(num(raw.lowMorale, 0, 0, 1e4));
   }
 
   /** 總經理（玩家）的身分資料 */
@@ -350,6 +373,7 @@
     st.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
     st.reputation = num(rb.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
     st.lowDays = Math.floor(num(rb.lowDays, 0, 0, 1e4));
+    cleanMorale(st, rb);
     st.over = null; // 分店倒閉時就直接關掉了，存檔裡不會有「已倒閉的分店」
     const rs = rb.stats || {};
     st.stats = {
@@ -413,6 +437,7 @@
     s.schedule = { open: close > open ? open : D.DAY.defaultOpen, close: close > open ? close : D.DAY.defaultClose, auto: sc.auto !== false };
     s.reputation = num(raw.reputation, 0, D.REPUTATION.min, D.REPUTATION.max);
     s.lowDays = Math.floor(num(raw.lowDays, 0, 0, 1e4));
+    cleanMorale(s, raw);
     const ov = raw.over;
     s.over = ov && typeof ov === 'object' ? { day: Math.floor(num(ov.day, 1, 1, 1e6)), reason: ov.reason === 'chain' ? 'chain' : 'reputation', served: Math.floor(num(ov.served, 0, 0, 1e9)), earned: Math.floor(num(ov.earned, 0, 0, 1e13)), level: Math.floor(num(ov.level, 1, 1, D.MAX_LEVEL)) } : null;
     // 舊存檔沒有洗碗槽：自動補一個（優先放在靠牆的一排；沒有空位就放進倉庫）

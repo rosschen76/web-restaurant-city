@@ -263,8 +263,8 @@
       let wages = 0;
       const pay = g.payWages;
       g.payWages = function () {
-        const r = pay.call(this);
-        wages += r.paid;
+        const r = pay.apply(this, arguments);
+        wages += r.paid + r.welfare + r.bonus;
         return r;
       };
       const abs0 = g.absMin();
@@ -297,7 +297,7 @@
         const r = this.settleStore(st);
         if (r && !r.closed && !r.over) reports.push(r);
       }
-      for (const r of reports) if (r.served > 0 || r.earned > 0) this.toast(`「${r.name}」：服務 ${r.served} 位客人，營收 ${RC.util.fmt(r.earned)}，發出日薪 ${RC.util.fmt(r.wages)}`, 'info');
+      for (const r of reports) if (r.served > 0 || r.earned > 0) this.toast(`「${r.name}」：服務 ${r.served} 位客人，營收 ${RC.util.fmt(r.earned)}，發出薪資與福利 ${RC.util.fmt(r.wages)}`, 'info');
       if (reports.length) this.changed();
       return reports;
     },

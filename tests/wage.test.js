@@ -27,19 +27,50 @@ const toMidnightBroke = (g) => {
   toMidnight(g);
 };
 
-test('日薪公式：人數越多基本薪資越高、能力越強越貴、掌櫃不領薪水', () => {
-  const avg = { speed: 1, skill: 1 };
-  assert.equal(RC.state.dailyWage(avg, 1), D.WAGE_BASE[1]);
-  assert.ok(RC.state.dailyWage(avg, 3) > RC.state.dailyWage(avg, 2));
-  assert.ok(RC.state.dailyWage({ speed: 1.4, skill: 1.4 }, 2) > RC.state.dailyWage({ speed: 0.8, skill: 0.8 }, 2));
-  assert.equal(RC.state.dailyWage(avg, 99), D.WAGE_BASE[D.WAGE_BASE.length - 1]);
+test('日薪公式：只看員工本身——能力越強、資歷越高越貴，和第幾個被雇用無關；掌櫃不領薪水', () => {
+  const avg = { speed: 1, skill: 1, level: 1 };
+  assert.equal(RC.state.dailyWage(avg), 45, '平均能力的新人');
+  assert.ok(RC.state.dailyWage({ speed: 1.4, skill: 1.4, level: 1 }) > RC.state.dailyWage({ speed: 0.8, skill: 0.8, level: 1 }));
+  // 資歷：等級越高越貴，Lv5 約新人的 2.8 倍、Lv10 約 7 倍、Lv15 約 14 倍（能力成長 0.02／0.03 每級不重複計價）
+  const at = (lv) => RC.state.dailyWage({ speed: 1 + 0.02 * (lv - 1), skill: 1 + 0.03 * (lv - 1), level: lv });
+  for (let lv = 2; lv <= 15; lv++) assert.ok(at(lv) > at(lv - 1), 'Lv' + lv);
+  assert.ok(at(5) / at(1) > 2.5 && at(5) / at(1) < 3.1);
+  assert.ok(at(10) / at(1) > 6.5 && at(10) / at(1) < 8);
+  assert.ok(at(15) / at(1) > 13 && at(15) / at(1) < 16);
+  assert.equal(RC.state.dailyWage({ speed: 1, skill: 1, level: 9, boss: true }), 0);
   assert.equal(RC.state.newGame().staff[0].wage, 0);
+});
+
+test('後來雇用的員工日薪不會比較高：同樣能力的應徵者，第 2 位和第 12 位日薪一樣', () => {
+  const cand = { speed: 1.1, skill: 1.1 };
+  const w = RC.state.dailyWage(cand);
+  const g = mk(11, (s) => ((s.coins = 1e6), (s.level = 40)));
+  for (let i = 0; i < 11; i++) {
+    g.s.candidates[0] = { ...g.s.candidates[0], ...cand };
+    assert.equal(g.hire(0).ok, true);
+    assert.equal(g.s.staff[g.s.staff.length - 1].wage, w, `第 ${i + 2} 位員工`);
+  }
+});
+
+test('升級後日薪跟著資歷調整；舊存檔載入時依能力與資歷重算（不再依到職順序）', () => {
+  const g = mk(12, (s) => ((s.coins = 5000), (s.level = 12)));
+  g.hire(0);
+  const rec = g.s.staff[1];
+  const w1 = rec.wage;
+  rec.xp = D.STAFF_XP_STEPS[rec.level] - 1;
+  g.gainStaffXp(rec);
+  assert.equal(rec.level, 2);
+  assert.ok(rec.wage > w1, '升級後日薪變高');
+  assert.equal(rec.wage, RC.state.dailyWage(rec));
+  const raw = JSON.parse(JSON.stringify(g.s));
+  raw.staff[1].wage = 99999;
+  assert.equal(RC.state.normalize(raw).staff[1].wage, rec.wage);
 });
 
 test('雇用不扣錢：只記下日薪；手上要有至少一天的薪水才能雇', () => {
   const g = mk(1, (s) => ((s.coins = 1000), (s.level = 5)));
   const cand = g.s.candidates[0];
-  const wage = RC.state.dailyWage(cand, g.s.staff.length);
+  const wage = RC.state.dailyWage(cand);
   assert.equal(g.hire(0).ok, true);
   assert.equal(g.s.coins, 1000, '雇用當下不扣金幣');
   assert.equal(g.s.staff[1].wage, wage);
@@ -57,6 +88,7 @@ test('午夜發日薪：從金幣扣除、掌櫃不領、工資加總正確', ()
   g.hire(1);
   const total = g.s.staff.reduce((n, m) => n + m.wage, 0);
   assert.ok(total > 0);
+  g.setWelfare(0); // 福利金另有測試（welfare.test.js）
   g.setBusinessHours(1, 2); // 今天剩下的時間都不營業，金幣只會因為發薪而減少
   const coins0 = g.s.coins;
   let wagesEvent = -1;
@@ -115,7 +147,7 @@ test('舊存檔（員工是一次買斷）：載入時依能力補上日薪，�
   raw.staff[0].wage = 999; // 掌櫃永遠 0
   const legacy = RC.state.normalize(raw);
   assert.equal(legacy.staff[0].wage, 0);
-  assert.equal(legacy.staff[1].wage, RC.state.dailyWage(legacy.staff[1], 1));
+  assert.equal(legacy.staff[1].wage, RC.state.dailyWage(legacy.staff[1]));
   assert.equal(legacy.staff[1].unpaid, 0);
 });
 
@@ -155,6 +187,7 @@ test('午夜按加薪後的日薪發放；加薪的員工動作更快（同樣�
   g.setRaise(g.s.staff[1].id, 20);
   const total = g.wageOf(g.s.staff[1]) + g.wageOf(g.s.staff[2]);
   assert.equal(total, Math.round(g.s.staff[1].wage * 1.2) + g.s.staff[2].wage);
+  g.setWelfare(0);
   g.setBusinessHours(1, 2);
   const coins0 = g.s.coins;
   toMidnight(g);

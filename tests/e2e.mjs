@@ -454,7 +454,8 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
   const before = await G(page, () => { const g = window.__game; g.game.setBusinessHours(1, 2); g.game.s.clock = 1439.9; return g.game.s.coins; });
   await page.waitForFunction(() => window.__game.game.s.day >= 2, null, { timeout: 8000 });
   const after = await G(page, () => window.__game.game.s.coins);
-  assert.ok(before - after >= wage - 5 && before - after <= wage + 5, `應扣一天日薪 ${wage}：${before} → ${after}`);
+  const welfare = Math.round(wage * 0.05); // 預設福利金 5%
+  assert.ok(before - after >= wage + welfare - 5 && before - after <= wage + welfare + 5, `應扣一天日薪 ${wage} 與福利金 ${welfare}：${before} → ${after}`);
 });
 
 await scenario('客流尖峰／離峰：HUD 顯示時段，排班頁有客流圖與尖峰時段', async (page) => {
@@ -485,6 +486,24 @@ await scenario('加薪：員工面板有 0～20% 滑桿，調整後日薪與能�
   assert.ok(after[1] > before[1]);
   const txt = await page.locator('.win-body').innerText();
   assert.ok(txt.includes('＋20%') && txt.includes('加薪加成'), txt);
+});
+
+await scenario('員工福利：員工面板有福利金與分紅滑桿（0～20%），顯示士氣，調整後生效並可存檔', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { const g = window.__game.game; g.s.coins = 5000; g.s.level = 5; g.hire(0); });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  const w = page.locator('[data-welfare=welfare]');
+  const b = page.locator('[data-welfare=bonus]');
+  assert.equal(await w.count(), 1);
+  assert.equal(await b.getAttribute('max'), '20');
+  assert.ok((await page.locator('.win-body').innerText()).includes('士氣'));
+  await w.evaluate((el) => { el.value = '15'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.locator('[data-welfare=bonus]').evaluate((el) => { el.value = '8'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  assert.deepEqual(await G(page, () => { const s = window.__game.game.s; return [s.welfare, s.bonus]; }), [15, 8]);
+  const txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('15%') && txt.includes('8%') && txt.includes('目標'), txt);
+  const saved = await G(page, () => { const t = window.RC.state.serialize(window.__game.game.s); const s = window.RC.state.parse(t); return [s.welfare, s.bonus]; });
+  assert.deepEqual(saved, [15, 8]);
 });
 
 await scenario('分店：開分店（總經理＋雙店長制）、檢視各店、存檔後重載、主動關店（資遣費）', async (page) => {

@@ -478,10 +478,10 @@
       const served = s.stats.served - this.dayMark.served;
       const earned = s.stats.earned - this.dayMark.earned;
       this.dayMark = { served: s.stats.served, earned: s.stats.earned };
-      const wages = this.payWages();
+      const wages = this.payWages(earned);
       s.day++;
-      this.emit('newday', { day: s.day, served, earned, wages: wages.paid, reputation: s.reputation });
-      if (served > 0 || earned > 0 || wages.paid > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣${wages.paid > 0 ? `，發出日薪 ${wages.paid}` : ''}`, 'info');
+      this.emit('newday', { day: s.day, served, earned, wages: wages.paid + wages.welfare + wages.bonus, reputation: s.reputation });
+      if (served > 0 || earned > 0 || wages.paid > 0) this.toast(`第 ${s.day - 1} 天結束：服務 ${served} 位客人，賺了 ${earned} 金幣${wages.paid > 0 ? `，發出日薪 ${wages.paid}${wages.welfare > 0 ? `、福利金 ${wages.welfare}` : ''}${wages.bonus > 0 ? `、分紅 ${wages.bonus}` : ''}` : ''}`, 'info');
       if (!this.offline) {
         // 風評連續停在谷底：滿 15 天餐廳就倒閉
         if (s.reputation <= REP.min + 1e-6) s.lowDays++;
@@ -501,10 +501,13 @@
     /**
      * 午夜發日薪（店掌櫃不領）。金幣不夠就先發給編號小的員工；領不到的員工累計欠薪天數，
      * 連續 3 天沒領到薪水就離職（離線補算期間不會離職，回來後才會知道）。
+     * 接著提撥福利金（薪資總額的 %）、發分紅（當天盈餘的 %，平分給在職員工），並結算員工士氣。
+     * earned：這一天的營收（算分紅用）。
      */
-    payWages() {
+    payWages(earned = 0) {
       const s = this.s;
       let paid = 0;
+      let unpaidCount = 0;
       const quits = [];
       for (const rec of s.staff) {
         const wage = this.wageOf(rec);
@@ -515,6 +518,7 @@
           rec.unpaid = 0;
         } else {
           rec.unpaid = Math.min(rec.unpaid + 1, WAGE_QUIT);
+          unpaidCount++;
           if (!this.offline && rec.unpaid >= WAGE_QUIT) quits.push(rec);
           else this.toast(`⚠ 金幣不夠發薪水：${rec.name} 已經 ${rec.unpaid} 天沒領到薪水`, 'bad');
         }
@@ -523,7 +527,72 @@
         this.fire(rec.id);
         this.toast(`${rec.name} 連續 ${WAGE_QUIT} 天領不到薪水，辭職了`, 'bad');
       }
-      return { paid, quits: quits.length };
+      const crew = s.staff.filter((m) => !m.boss);
+      // 福利金：按薪資總額提撥；分紅：當天賺的錢扣掉薪水與福利金後還有盈餘才發，平分給在職員工
+      const welfare = Math.min(s.coins, Math.round((paid * s.welfare) / 100));
+      s.coins -= welfare;
+      const profit = Math.max(0, earned - paid - welfare);
+      const bonus = crew.length ? Math.min(s.coins, Math.round((profit * s.bonus) / 100)) : 0;
+      s.coins -= bonus;
+      const quitters = this.stepMorale(crew.length - quits.length, unpaidCount / Math.max(1, crew.length));
+      return { paid, quits: quits.length + quitters, welfare, bonus };
+    }
+
+    /**
+     * 員工士氣：每天朝「目標士氣」靠近。目標 = 基本 + 福利金 × 3 + 分紅 × 1.5 - 人數超過 4 位後每多一位 2.5，
+     * 領不到薪水的員工越多再扣。連續 3 天低於 25 就有一位員工離職（離線補算不會）。回傳離職人數。
+     */
+    stepMorale(n, unpaidShare) {
+      const s = this.s;
+      const M = D.MORALE;
+      if (n <= 0) {
+        s.lowMorale = 0;
+        return 0;
+      }
+      const target = clamp(M.base + M.perWelfare * s.welfare + M.perBonus * s.bonus - M.crowdPer * Math.max(0, n - M.crowdFrom) - M.unpaidHit * unpaidShare, 0, 100);
+      s.morale = clamp(s.morale + (target - s.morale) * M.follow, 0, 100);
+      if (s.morale >= M.lowBelow) {
+        s.lowMorale = 0;
+        return 0;
+      }
+      s.lowMorale++;
+      if (this.offline || s.lowMorale < M.lowDays) {
+        if (!this.offline) this.toast(`⚠ 員工士氣很低（${Math.round(s.morale)}），再不提高福利金或分紅，有人要離職了`, 'bad');
+        return 0;
+      }
+      // 心灰意冷離職的，是沒有擔任店長、資歷最淺的員工（店長不輕易走）
+      const pool = s.staff.filter((m) => !m.boss && !m.manager);
+      if (!pool.length) return 0;
+      const gone = pool.reduce((a, b) => (b.level < a.level || (b.level === a.level && b.id > a.id) ? b : a));
+      this.fire(gone.id);
+      s.lowMorale = 0;
+      s.morale = Math.min(100, s.morale + M.quitRelief);
+      this.toast(`${gone.name} 覺得福利太差、工作太累，離職了`, 'bad');
+      return 1;
+    }
+
+    /** 預估目前政策的目標士氣與每天的福利支出（介面顯示用） */
+    welfareForecast() {
+      const s = this.s;
+      const M = D.MORALE;
+      const crew = s.staff.filter((m) => !m.boss);
+      const payroll = crew.reduce((a, m) => a + this.wageOf(m), 0);
+      const target = clamp(M.base + M.perWelfare * s.welfare + M.perBonus * s.bonus - M.crowdPer * Math.max(0, crew.length - M.crowdFrom), 0, 100);
+      return { payroll, welfare: Math.round((payroll * s.welfare) / 100), target: Math.round(target), n: crew.length };
+    }
+
+    setWelfare(pct) {
+      pct = Math.round(+pct);
+      if (!(pct >= 0 && pct <= D.MORALE.welfareMax)) return this.fail(`福利金要在 0～${D.MORALE.welfareMax}% 之間`);
+      this.s.welfare = pct;
+      return this.done();
+    }
+
+    setBonus(pct) {
+      pct = Math.round(+pct);
+      if (!(pct >= 0 && pct <= D.MORALE.bonusMax)) return this.fail(`分紅要在 0～${D.MORALE.bonusMax}% 之間`);
+      this.s.bonus = pct;
+      return this.done();
     }
 
     /** 遊戲是否已經結束：只有主店倒閉才算（分店倒閉只是關店）；玩家在分店時，主店也可能在背景倒閉 */
@@ -1356,7 +1425,13 @@
 
     /** 加薪帶來的能力加成倍率（1 = 沒加薪） */
     raiseBoost(rec) {
-      return 1 + (D.RAISE.abilityPerPct * (rec.raise || 0)) / 100;
+      return (1 + (D.RAISE.abilityPerPct * (rec.raise || 0)) / 100) * this.moraleBoost();
+    }
+    /** 士氣對能力的影響：高於 60 小幅提升（最多 +7%）、低於 60 下降（最多 -10%） */
+    moraleBoost() {
+      const M = D.MORALE;
+      const m = this.s.morale;
+      return m >= M.mid ? 1 + (M.abilityHi * (m - M.mid)) / (100 - M.mid) : 1 - (M.abilityLo * (M.mid - m)) / M.mid;
     }
     /** 實際速度／技術：基本能力（含升級成長）× 加薪加成 */
     speedOf(rec) {
@@ -1377,6 +1452,7 @@
         rec.level++;
         rec.skill = Math.round((rec.skill + 0.03) * 100) / 100;
         rec.speed = Math.round((rec.speed + 0.02) * 100) / 100;
+        rec.wage = RC.state.dailyWage(rec); // 資歷變高，日薪跟著調整
         this.toast(rec.name + ' 升到 Lv.' + rec.level + (!rec.boss && rec.level === DAYC.deputyLevel ? '！可以擔任副店長了' : !rec.boss && rec.level === DAYC.managerLevel ? '！可以擔任正店長，副店長也有結帳權限了' : '！'), 'good');
         this.emit('sfx', 'levelup');
       }
@@ -1647,7 +1723,7 @@
       if (!cand) return this.fail('找不到應徵者');
       if (s.staff.filter((m) => !m.boss).length >= D.maxStaffForLevel(s.level)) return this.fail('員工人數已達上限，升級可增加名額');
       // 不再一次買斷：雇用不用付錢，之後每天午夜發日薪。手上至少要有一天的薪水，免得第一天就發不出來
-      const wage = RC.state.dailyWage(cand, s.staff.length);
+      const wage = RC.state.dailyWage(cand);
       if (s.coins < wage) return this.fail(`金幣不足：至少要有一天的日薪 ${wage}`);
       // 新員工當下立刻開始第一個班（8 小時）；自動排班會在隔天重新規劃
       const rec = RC.state.newStaff(s.nextStaffId++, { ...cand, wage, shift: Math.floor(this.hour) % 24 });

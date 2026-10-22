@@ -230,7 +230,7 @@
       set(this.el.navQuest, !!(q && q.done), '!');
       const learnable = D.dishList.filter((d) => !s.dishes[d.id] && s.level >= d.level && s.coins >= d.learn).length;
       set(this.el.navMenu, learnable > 0, String(learnable));
-      const hireable = s.staff.filter((m) => !m.boss).length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.dailyWage(c, s.staff.length));
+      const hireable = s.staff.filter((m) => !m.boss).length < D.maxStaffForLevel(s.level) && s.candidates.some((c) => s.coins >= RC.state.dailyWage(c));
       set(this.el.navStaff, hireable, '+');
     }
 
@@ -704,7 +704,18 @@
       };
       const cur = [...s.staff].sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0)).map(row).join('');
       const gmNote = g.isGM() ? `<div class="sub" style="margin:0 3px 6px">你是<b>總經理</b>，不屬於任何一間店。這間店（「${esc(s.name)}」）由正、副店長主持。</div>` : '';
-      return `${gmNote}<div class="section-title" style="margin-top:0">${g.isGM() ? '員工' : '店掌櫃 + 員工'} ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
+      const fc = g.welfareForecast();
+      const mor = Math.round(s.morale);
+      const moraleTag = mor >= 80 ? '<span class="good">幹勁十足</span>' : mor >= D.MORALE.mid ? '普通' : mor >= D.MORALE.lowBelow ? '<span class="bad">低落（能力下降）</span>' : '<span class="bad">⚠ 快撐不住了</span>';
+      const welfareCard = `<div class="row welfare-card"><div class="grow">
+          <div class="nm">員工福利　<span class="tag">士氣 <b data-morale>${mor}</b> / 100</span> ${moraleTag}</div>
+          <div class="bar" style="max-width:220px"><i style="width:${mor}%"></i></div>
+          <div class="sub raise-row">福利金 <input type="range" min="0" max="${D.MORALE.welfareMax}" step="1" value="${s.welfare}" data-welfare="welfare" aria-label="福利金占薪資總額的百分比"><b data-welfare-label>${s.welfare}%</b></div>
+          <div class="sub raise-row">分　紅 <input type="range" min="0" max="${D.MORALE.bonusMax}" step="1" value="${s.bonus}" data-welfare="bonus" aria-label="分紅占當天盈餘的百分比"><b data-welfare-label>${s.bonus}%</b></div>
+          <div class="sub">目前政策：每天午夜提撥福利金約 ${ic('coin', 1)}${fmt(fc.welfare)}（薪資 ${fmt(fc.payroll)} × ${s.welfare}%）；分紅是當天扣掉薪水與福利金後盈餘的 ${s.bonus}%，平分給 ${fc.n} 位員工。士氣會朝目標 <b>${fc.target}</b> 移動。</div>
+          <div class="sub">員工超過 ${D.MORALE.crowdFrom} 位後，每多一位目標士氣 −${D.MORALE.crowdPer}；士氣高於 ${D.MORALE.mid} 速度與技術最多 +${Math.round(D.MORALE.abilityHi * 100)}%、低於則最多 −${Math.round(D.MORALE.abilityLo * 100)}%；連續 ${D.MORALE.lowDays} 天低於 ${D.MORALE.lowBelow} 就會有人離職。${s.lowMorale > 0 ? ` <span class="bad">（已連續 ${s.lowMorale} 天）</span>` : ''}</div>
+        </div></div>`;
+      return `${gmNote}${welfareCard}<div class="section-title" style="margin-top:0">${g.isGM() ? '員工' : '店掌櫃 + 員工'} ${hired} / ${cap}${hired >= cap ? '（升級可增加名額）' : ''}</div>${cur}
         <div class="sub" style="margin:6px 3px">每天午夜發日薪，合計 ${ic('coin', 1)}<b>${fmt(totalWage)}</b>；金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到就會辭職。</div>
         <div class="sub" style="margin:6px 3px">員工等級最高 Lv.${D.STAFF_XP_STEPS.length}。可以替每位員工<b>加薪 0～${D.RAISE.max}%</b>：日薪照比例增加，速度與技術也跟著提升（每 1% 加薪 +${D.RAISE.abilityPerPct}% 能力，最多 +${D.RAISE.max * D.RAISE.abilityPerPct}%）；調回 0% 能力就恢復。</div>
         <div class="sub" style="margin:6px 3px">員工負責點餐、煮菜、上菜、收桌子與洗碗（不能收金幣；每間店實行雙店長制：<b>正店長</b>（Lv.${D.DAY.managerLevel} 以上）與<b>副店長</b>（Lv.${D.DAY.deputyLevel} 以上），正店長、Lv.${D.DAY.managerLevel} 以上的副店長才有結帳權限）。速度影響走路與動作，技術影響烹飪時間。體力耗盡會自動休息，也可以花錢餵食立刻恢復。</div>
@@ -720,7 +731,7 @@
       const totalWage = s.staff.reduce((n, m) => n + (m.wage || 0), 0);
       const cands = s.candidates
         .map((c, i) => {
-          const wage = RC.state.dailyWage(c, s.staff.length);
+          const wage = RC.state.dailyWage(c);
           const lack = s.coins < wage;
           return `<div class="row"><div class="ico"><img class="px" src="${avatar(c.look, true)}" width="30" height="54" alt=""></div>
             <div class="grow"><div class="nm">${esc(c.name)}</div><div class="sub">速度 ${c.speed.toFixed(2)}　技術 ${c.skill.toFixed(2)}</div>
@@ -731,7 +742,7 @@
       return `<div class="section-title" style="margin-top:0">應徵者　<button class="btn small" data-act="refresh-cands">重新徵才 ${ic('coin', 1)}30</button></div>
         <div class="sub" style="margin:0 3px 4px">員工名額 ${hired} / ${cap}${canHire ? '' : '（已額滿，升級可增加名額）'}　現有員工日薪合計 ${ic('coin', 1)}${fmt(totalWage)} / 天</div>
         ${cands}
-        <div class="sub" style="margin:6px 3px;line-height:1.6">雇用<b>不用先付錢</b>，改成每天午夜發<b>日薪</b>（店掌櫃不領薪水）。手上要有至少一天的薪水才能雇；之後金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到薪水就會辭職。能力越強、人數越多，日薪越高。</div>`;
+        <div class="sub" style="margin:6px 3px;line-height:1.6">雇用<b>不用先付錢</b>，改成每天午夜發<b>日薪</b>（店掌櫃不領薪水）。手上要有至少一天的薪水才能雇；之後金幣不夠發的員工會累積欠薪，連續 ${D.WAGE_QUIT_DAYS} 天領不到薪水就會辭職。日薪只看員工本身：<b>能力越強、資歷（等級）越高</b>越貴，和第幾個雇用無關。員工越多越難帶，記得到「員工」分頁設定福利金與分紅。</div>`;
     }
 
     /** 排班：營業時間、自動排班、每位員工的班別與 24 小時覆蓋 */
@@ -1458,6 +1469,12 @@
           if (lab) lab.textContent = rz.value + '%'; // 拖曳時先更新數字，放開才真的套用
           return;
         }
+        const wz = e.target.closest && e.target.closest('[data-welfare]');
+        if (wz) {
+          const lab = wz.parentElement.querySelector('[data-welfare-label]');
+          if (lab) lab.textContent = wz.value + '%';
+          return;
+        }
         const el = e.target.closest && e.target.closest('[data-vol]');
         if (!el) return;
         const A = RC.audio;
@@ -1476,6 +1493,15 @@
         const co = e.target.closest && e.target.closest('[data-co]');
         if (co && this.panel && this.panel.name === 'company') {
           this.panel.sel = { ...(this.panel.sel || {}), [co.dataset.co]: co.value };
+          return;
+        }
+        const wz = e.target.closest && e.target.closest('[data-welfare]');
+        if (wz) {
+          const r = wz.dataset.welfare === 'bonus' ? this.game.setBonus(+wz.value) : this.game.setWelfare(+wz.value);
+          if (!r.ok) this.toast(r.msg, 'bad');
+          RC.audio.sfx(r.ok ? 'click' : 'error');
+          if (this.panel) this.panel.lastHtml = null;
+          this.renderPanel();
           return;
         }
         const rz = e.target.closest && e.target.closest('[data-raise]');
