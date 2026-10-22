@@ -431,6 +431,19 @@ await scenario('招聘獨立分頁：雇用不扣金幣、顯示日薪；員工�
   assert.ok(before - after >= wage - 5 && before - after <= wage + 5, `應扣一天日薪 ${wage}：${before} → ${after}`);
 });
 
+await scenario('客流尖峰／離峰：HUD 顯示時段，排班頁有客流圖與尖峰時段', async (page) => {
+  await page.click('[data-act=welcome-ok]');
+  await G(page, () => { window.__game.game.s.clock = 12.5 * 60; });
+  await page.waitForFunction(() => document.querySelector('#clock').textContent.includes('尖峰'), null, { timeout: 4000 });
+  await G(page, () => { window.__game.game.s.clock = 15.5 * 60; });
+  await page.waitForFunction(() => document.querySelector('#clock').textContent.includes('離峰'), null, { timeout: 4000 });
+  await page.click('.bottom-bar [data-act=open-staff]');
+  await page.click('[data-tab=sched]');
+  const txt = await page.locator('.win-body').innerText();
+  assert.ok(txt.includes('客人上門的頻率') && txt.includes('尖峰時段：12:00–14:00、18:00–20:00'), txt);
+  assert.equal(await page.locator('.h24 i[title*="客流"]').count(), 24);
+});
+
 await scenario('風評連續 15 天谷底：遊戲終止並顯示重新開始視窗；重新開始會清掉存檔', async (page) => {
   await page.click('[data-act=welcome-ok]');
   await G(page, () => { const g = window.__game.game; g.s.reputation = -10; g.s.lowDays = 14; g.s.clock = 1439.5; });

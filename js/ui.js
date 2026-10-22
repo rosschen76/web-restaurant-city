@@ -326,8 +326,10 @@
       const open = g.isOpen();
       const rep = s.reputation;
       const repCls = rep <= -7 ? 'bad' : rep >= 3 ? 'good' : '';
+      const kind = D.demandKind(D.demandAt(s.clock / 60));
+      const rush = open ? `<span class="${kind === 'peak' ? 'peak' : kind === 'off' ? 'dim' : ''}">${D.DEMAND_NAMES[kind]}</span>` : '';
       const doom = s.lowDays > 0 ? `　<span class="bad">⚠ 谷底 ${s.lowDays}/${D.REPUTATION.loseDays} 天</span>` : '';
-      const html = `第 ${s.day} 天 ${hh}:${mm}・<span class="${open ? 'good' : 'dim'}">${open ? '營業中' : '休息中'}</span>　風評 <b class="${repCls}">${rep > 0 ? '+' : ''}${rep.toFixed(1)}</b>${doom}`;
+      const html = `第 ${s.day} 天 ${hh}:${mm}・<span class="${open ? 'good' : 'dim'}">${open ? '營業中' : '休息中'}</span>${rush ? '・' + rush : ''}　風評 <b class="${repCls}">${rep > 0 ? '+' : ''}${rep.toFixed(1)}</b>${doom}`;
       if (this.el.clock.innerHTML !== html) this.el.clock.innerHTML = html;
     }
 
@@ -600,6 +602,24 @@
           return `<i class="${cov.open[h] ? 'open ' : ''}${bad ? 'bad' : n ? 'ok' : ''}" title="${hhmm(h)}：${n} 人在班，${cov.payers[h]} 人能收款"></i>`;
         })
       );
+      const demandBar = bar(
+        D.DEMAND.map((v, h) => {
+          const kind = D.demandKind(v);
+          const a = Math.min(1, 0.12 + (v / 1.6) * 0.88).toFixed(2);
+          return `<i class="${cov.open[h] ? 'open' : ''}" style="background-color:rgba(232,134,58,${a})" title="${hhmm(h)}：客流 ×${v.toFixed(1)}（${D.DEMAND_NAMES[kind]}）"></i>`;
+        })
+      );
+      // 尖峰時段（連續的整點合併成一段）
+      const peakRanges = [];
+      for (let h = 0; h < 24; h++) {
+        if (D.demandKind(D.DEMAND[h]) !== 'peak') continue;
+        const last = peakRanges[peakRanges.length - 1];
+        if (last && last[1] === h) last[1] = h + 1;
+        else peakRanges.push([h, h + 1]);
+      }
+      const peakText = peakRanges.map(([a, b]) => `${hhmm(a)}–${hhmm(b)}`).join('、');
+      const thin = [];
+      for (let h = 0; h < 24; h++) if (cov.open[h] && D.demandKind(D.DEMAND[h]) === 'peak' && s.staff.length >= 2 && cov.staff[h] < 2) thin.push(h);
       const gaps = [];
       for (let h = 0; h < 24; h++) if (cov.open[h] && cov.staff[h] === 0) gaps.push(h);
       const noPay = [];
@@ -607,6 +627,7 @@
       const fmtH = (a) => a.map((h) => hhmm(h)).join('、');
       const warns = [];
       if (gaps.length) warns.push(`營業時間內 ${fmtH(gaps)} 沒有人在班，客人進不了門。`);
+      if (thin.length) warns.push(`尖峰時段 ${fmtH(thin)} 只有 1 人在班，客人一多就會排隊流失，建議把其他人的班排進來。`);
       if (noPay.length) warns.push(`${fmtH(noPay)} 在班的人裡沒有店掌櫃或值班店長，客人只能自助結帳（風評較差）。`);
       const rows = [...s.staff]
         .sort((a, b) => (b.boss ? 1 : 0) - (a.boss ? 1 : 0))
@@ -628,6 +649,9 @@
         <div class="sub" style="margin:4px 0">打烊時店裡還有客人、桌上有餐具或洗碗槽有髒盤子，班表剛好結束的員工會<b>留下來收店</b>：客人吃完、結帳、餐具洗完才下班（最多加班 ${D.DAY.closeOvertimeMin / 60} 小時）。營業時間還沒結束就到點的班，照樣準時下班。</div>
         <div class="sub">各時段在班人數（亮格＝營業時間，紅色＝缺人或沒人能收款）</div>${covBar}
         <div class="h24-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+        <div class="sub" style="margin-top:8px">客人上門的頻率（顏色越深客人越多；亮格＝營業時間）</div>${demandBar}
+        <div class="h24-labels"><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>
+        <div class="sub">尖峰時段：${peakText}；下午與深夜是離峰，客人少。尖峰時客人比較有耐心排隊，客滿走掉的風評扣分也減半。</div>
         ${warns.map((w) => `<div class="warn-line">⚠ ${w}</div>`).join('')}
         <div class="section-title">班表</div>${rows}`;
     }
@@ -1413,6 +1437,7 @@
       this.warnTimer += dt;
       if (this.warnTimer > 0.5) {
         this.warnTimer = 0;
+        this.updateClock(); // 時鐘不靠事件觸發，固定時間刷新
         this.updateWarn();
         this.refreshBadges();
         // 經驗條等緩慢變化的數值

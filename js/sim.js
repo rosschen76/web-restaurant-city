@@ -237,6 +237,16 @@
       return Math.max(1.2, base / (stoveSpeed * skill));
     }
 
+    /** 現在的客流倍率：尖峰客人多、離峰客人少（不分日夜的測試模式固定為 1） */
+    demand() {
+      return this.dayMode ? D.demandAt(this.hour) : 1;
+    }
+
+    /** 現在是不是尖峰時段 */
+    isPeak() {
+      return this.dayMode && D.demandKind(D.demandAt(this.hour)) === 'peak';
+    }
+
     spawnInterval() {
       const base = 9 / (1 + this.appeal / 50) / (1 + 0.04 * (this.s.level - 1));
       // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）
@@ -561,7 +571,7 @@
       if (this.queue.includes(party) && this.queuePeople() > D.QUEUE_MAX_PEOPLE) {
         this.queue = this.queue.filter((x) => x !== party);
         this.s.stats.walkouts++;
-        this.adjustRep(REP.turnaway);
+        this.adjustRep(REP.turnaway * (this.isPeak() ? D.PEAK_REP_SHARE : 1));
         this.emit('turnaway', { size });
         return false;
       }
@@ -1248,7 +1258,7 @@
         if (this.s.over) return; // 這一步剛好結束了遊戲
         this.updateDuty();
       }
-      this.spawnTimer -= dt;
+      this.spawnTimer -= dt * this.demand(); // 倍率高的時段倒數得快，客人上門更勤
       if (this.spawnTimer <= 0) {
         if (this.canOpenDoor()) {
           this.trySpawn();
@@ -1276,12 +1286,13 @@
     /** 候位：耐心遞減、坐不下任何桌子的組別直接離開、有空桌就入座。 */
     stepQueue(dt) {
       if (!this.queue.length) return;
+      const peak = this.isPeak();
       for (const party of this.queue.slice()) {
-        party.p -= dt / D.QUEUE_PATIENCE;
+        party.p -= dt / (D.QUEUE_PATIENCE * (peak ? D.PEAK_PATIENCE : 1));
         if (party.p <= 0 || party.size > this.maxTableCap) {
           this.queue = this.queue.filter((x) => x !== party);
           this.s.stats.walkouts++;
-          this.adjustRep(REP.walkout);
+          this.adjustRep(REP.walkout * (peak ? D.PEAK_REP_SHARE : 1));
           this.emit('walkout', { size: party.size });
         }
       }
@@ -1566,7 +1577,29 @@
       for (let i = 0; i < k; i++) slots.push(k === 1 ? open : Math.round(open + (i * (len - DAYC.shiftHours)) / (k - 1)));
       const slotOrder = k === 1 ? [0] : [0, k - 1, ...Array.from({ length: Math.max(0, k - 2) }, (_, i) => i + 1)];
       const people = [...s.staff].sort((a, b) => (b.boss ? 2 : b.manager ? 1 : 0) - (a.boss ? 2 : a.manager ? 1 : 0) || a.id - b.id);
-      people.forEach((rec, i) => (rec.shift = (((slots[slotOrder[i % k]] % 24) + 24) % 24)));
+      const count = Array(24).fill(0); // 各鐘點已經排了幾個人
+      const cover = (start) => {
+        for (let j = 0; j < DAYC.shiftHours; j++) count[(start + j) % 24]++;
+      };
+      people.forEach((rec, i) => {
+        if (i < k) {
+          rec.shift = ((slots[slotOrder[i]] % 24) + 24) % 24; // 先排滿營業時間
+        } else {
+          // 多出來的人：排在人手最吃緊的尖峰（客流倍率高、已經排的人少）
+          let best = open;
+          let bestScore = -1;
+          for (let st = open; st <= Math.max(open, close - DAYC.shiftHours); st++) {
+            let score = 0;
+            for (let h = Math.max(st, open); h < Math.min(st + DAYC.shiftHours, close); h++) score += D.DEMAND[h % 24] / (1 + count[h % 24]);
+            if (score > bestScore + 1e-9) {
+              bestScore = score;
+              best = st;
+            }
+          }
+          rec.shift = ((best % 24) + 24) % 24;
+        }
+        cover(rec.shift);
+      });
     }
 
     /** 每個鐘點（0~23）有幾位員工在班、其中幾位能收款；以及是否營業時段。 */
