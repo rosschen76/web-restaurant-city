@@ -247,11 +247,37 @@
       return this.dayMode && D.demandKind(D.demandAt(this.hour)) === 'peak';
     }
 
+    /** 每位客人的平均上門間隔（秒）：對齊這個等級的人手上限，魅力越高客人越多 */
     spawnInterval() {
-      const base = 9 / (1 + this.appeal / 50) / (1 + 0.04 * (this.s.level - 1));
+      const F = D.FLOW;
+      const lv = this.s.level;
+      const labor = clamp(F.laborBase + F.laborPerLevel * (lv - 1), F.laborBase, F.laborMax);
+      const people = D.maxStaffForLevel(lv) + 1; // 含店掌櫃
+      const appeal = F.appealMin + F.appealSpan * Math.min(1, this.appeal / F.appealFull);
+      const base = labor / people / F.load / appeal;
       // 風評好客人上門更勤、風評差就變少（每 1 分 ±3%）
       const rep = Math.max(0.3, 1 + REP.arrivalEffect * this.s.reputation);
-      return (clamp(base, 1.5, 9) * this.rng.range(0.7, 1.3)) / rep;
+      return (clamp(base, F.minGap, F.maxGap) * this.rng.range(0.7, 1.3)) / rep;
+    }
+
+    /** 魅力（裝飾、桌椅）占滿的比例 0~1：環境越好，客人越有耐心、小費越多 */
+    ambience() {
+      return Math.min(1, this.appeal / D.FLOW.appealFull);
+    }
+
+    /** 還沒開始用餐、正等著員工照顧的客人數（進場、挑菜、等點餐、等上菜） */
+    pendingGuests() {
+      let n = 0;
+      for (const c of this.customers) if (c.state === 'arrive' || c.state === 'enter' || c.state === 'browse' || c.state === 'wait_order' || c.state === 'ordering' || c.state === 'wait_food') n++;
+      return n;
+    }
+
+    /** 入座控管：同時照顧的客人不超過在班員工的出餐能力（沒有人在等的時候一律放行，避免卡死） */
+    canAdmit(size) {
+      const pending = this.pendingGuests();
+      if (pending === 0) return true;
+      const staff = this.crew.filter((m) => m.onDuty).length;
+      return pending + size <= Math.max(D.FLOW.admitMin, Math.ceil(staff * D.FLOW.admitPerStaff));
     }
 
     /* ───────── 員工 ───────── */
@@ -598,6 +624,7 @@
     seatQueue() {
       if (!this.stoves.length) return;
       for (const party of this.queue.slice()) {
+        if (!this.canAdmit(party.size)) continue;
         const found = this.findTable(party.size);
         if (found) this.seatParty(party, found.table, found.seats);
       }
@@ -753,12 +780,12 @@
           }
           break;
         case 'wait_order':
-          c.p -= dt / (ORDER_PATIENCE * (c.vip ? 0.8 : 1));
+          c.p -= dt / (ORDER_PATIENCE * (c.vip ? 0.8 : 1) * (1 + D.FLOW.patienceBonus * this.ambience()));
           break;
         case 'ordering':
           break;
         case 'wait_food':
-          c.p -= dt / (FOOD_PATIENCE + D.dishes[c.dish].cook * 2);
+          c.p -= dt / ((FOOD_PATIENCE + D.dishes[c.dish].cook * 2) * (1 + D.FLOW.patienceBonus * this.ambience()));
           break;
         case 'eat':
           c.t -= dt;
@@ -790,7 +817,7 @@
       const mult = c.vip ? 3 : 1;
       const speedBonus = clamp((c.servedP - 0.5) * 2, 0, 1); // 上菜越快小費越多
       c.bill = info.price * mult;
-      c.tipBase = Math.round(info.price * 0.5 * speedBonus * mult);
+      c.tipBase = Math.round(info.price * 0.5 * speedBonus * mult * (1 + D.FLOW.tipBonus * this.ambience()));
       this.s.stats.served++;
       this.addXp(info.def.xp * mult);
       c.state = 'wait_pay';
@@ -1288,7 +1315,7 @@
       if (!this.queue.length) return;
       const peak = this.isPeak();
       for (const party of this.queue.slice()) {
-        party.p -= dt / (D.QUEUE_PATIENCE * (peak ? D.PEAK_PATIENCE : 1));
+        party.p -= dt / (D.QUEUE_PATIENCE * (peak ? D.PEAK_PATIENCE : 1) * (1 + D.FLOW.patienceBonus * this.ambience()));
         if (party.p <= 0 || party.size > this.maxTableCap) {
           this.queue = this.queue.filter((x) => x !== party);
           this.s.stats.walkouts++;

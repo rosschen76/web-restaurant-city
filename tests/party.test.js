@@ -36,6 +36,7 @@ test('桌子容量：以桌為單位統計座位', () => {
 
 test('不強制併桌：不同組不會共用同一張桌子，且採最小夠坐', () => {
   const g = mk(TWO_TABLES);
+  g.canAdmit = () => true; // 這個測試只看桌子怎麼分配，入座控管另有測試（balance.test.js）
   const trio = party(g, 3);
   g.queue.push(trio);
   g.seatQueue();

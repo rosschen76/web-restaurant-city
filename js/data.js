@@ -105,6 +105,8 @@
     { w: 10, h: 10, cost: 800, level: 3 },
     { w: 12, h: 12, cost: 5000, level: 7 },
     { w: 14, h: 14, cost: 20000, level: 12 },
+    { w: 16, h: 16, cost: 60000, level: 22 },
+    { w: 18, h: 18, cost: 180000, level: 32 },
   ];
 
   /* ───────── 等級 / 星級 / 員工 ───────── */
@@ -122,9 +124,11 @@
   }
   /** 下一顆星需要的魅力；已經三星則回傳 null */
   const nextStarAppeal = (stars) => (stars < MAX_STARS ? STAR_STEPS[stars] : null);
-  const maxStaffForLevel = (lv) => Math.min(8, 1 + (lv >= 2) + (lv >= 4) + (lv >= 6) + (lv >= 9) + (lv >= 12) + (lv >= 15) + (lv >= 18));
+  // 員工名額：Lv2/4/6/9/12/15/18 各 +1（到 8 位），之後 Lv21/24/27/30 再各 +1（最多 12 位），讓 20 級以後仍有成長
+  const STAFF_UNLOCK = [2, 4, 6, 9, 12, 15, 18, 21, 24, 27, 30];
+  const maxStaffForLevel = (lv) => 1 + STAFF_UNLOCK.filter((l) => lv >= l).length;
   // 員工領日薪（每天午夜發放，不是一次性買斷）：依「現有人數」決定基本日薪，再乘上應徵者能力
-  const WAGE_BASE = [0, 50, 80, 120, 180, 260, 360, 480];
+  const WAGE_BASE = [0, 50, 80, 120, 180, 260, 360, 480, 600, 740, 900, 1080, 1280];
   const WAGE_QUIT_DAYS = 3; // 連續這麼多天領不到薪水，員工就會離職
   const STAFF_XP_STEPS = [0, 10, 25, 50, 85, 130, 190, 260, 340, 430]; // 最高 10 級
   const FEED_COST = 15;
@@ -205,6 +209,26 @@
   const demandKind = (v) => (v >= PEAK_AT ? 'peak' : v < OFFPEAK_AT ? 'off' : 'normal');
   const DEMAND_NAMES = { peak: '尖峰', normal: '一般', off: '離峰' };
 
+  /* ───────── 客流規模與入座控管（平衡性） ─────────
+   * 每位客人平均要吃掉員工約 16～26 秒的人力（點餐、煮菜、上菜、結帳、收桌、洗碗），隨等級上升（菜越複雜、店越大）。
+   * 客人上門的速度對齊「這個等級的人手上限」能處理的量，魅力高則客人更多（0.7～1.3 倍）；
+   * 而且店家不會一次放進比出餐能力更多的客人：沒空處理的客人留在門外候位，不會坐在位子上乾等到生氣。 */
+  const FLOW = {
+    laborBase: 16, // 一位客人要花的員工秒數（1 級）
+    laborPerLevel: 0.5, // 每升一級增加
+    laborMax: 27,
+    load: 1.0, // 客流／人手上限的處理量；> 1 更忙
+    appealMin: 0.7, // 魅力為 0 的客流倍率
+    appealSpan: 0.6, // 魅力達到 appealFull 時再增加的倍率
+    appealFull: 400,
+    minGap: 2, // 客人間隔的下限（秒）
+    maxGap: 30,
+    admitPerStaff: 2.2, // 每位在班員工同時能照顧幾位「還沒開始用餐」的客人
+    admitMin: 3,
+    patienceBonus: 0.3, // 環境（魅力）越好，客人越有耐心：魅力達 appealFull 時耐心 +30%
+    tipBonus: 0.5, // 魅力達 appealFull 時小費 +50%
+  };
+
   /* ───────── 風評 ───────── */
   // 風評介於 -10 ~ +10：客人滿意加分、氣走或等不到位子扣分。
   // 風評一直停在谷底（-10）連續 15 天，餐廳就倒閉、遊戲終止。
@@ -256,6 +280,6 @@
     maxStaffForLevel, WAGE_BASE, WAGE_QUIT_DAYS, STAFF_XP_STEPS, FEED_COST, FEED_AMOUNT,
     PALETTE, STAFF_NAMES, VIP_TITLES,
     quests, unlocksAt,
-    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
+    PARTY_MAX, PARTY_WEIGHTS, QUEUE_MAX_PEOPLE, QUEUE_PATIENCE, OFFLINE, PLATES, DAY, FLOW, REPUTATION, GAME_VERSION, DEMAND, PEAK_AT, OFFPEAK_AT, PEAK_PATIENCE, PEAK_REP_SHARE, demandAt, demandKind, DEMAND_NAMES,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);
