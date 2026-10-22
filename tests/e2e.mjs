@@ -507,6 +507,14 @@ await scenario('菜單面板：學習／菜單／進貨／成就四個分頁；�
   assert.equal(await G(page, () => window.__game.game.s.menu.includes('soymilk')), false);
   await page.click('[data-act=menu-add][data-id=soymilk]');
   assert.equal(await G(page, () => window.__game.game.s.menu.includes('soymilk')), true);
+  // 漲價：熟練度不夠沒有按鈕；熟練度 5 級（上限 4%）可以漲、漲價合計影響來客率；套餐搭配預覽
+  assert.equal(await page.locator('[data-act=markup-step]').count(), 0, '熟練度 1 級不能漲價');
+  await G(page, () => { const g = window.__game.game; g.s.dishes.danbing.cooked = 120; g.changed(); });
+  await page.locator('[data-act=markup-step][data-id=danbing][data-d="1"]').click();
+  await page.locator('[data-act=markup-step][data-id=danbing][data-d="1"]').click();
+  assert.equal(await G(page, () => window.__game.game.s.markup.danbing), 2);
+  assert.ok((await page.locator('.win-body').innerText()).includes('漲價合計 2%'));
+  assert.ok((await page.locator('.win-body').innerText()).includes('套餐搭配'), '有搭配說明');
   // 進貨：每日進貨量
   await page.click('[data-tab=stock]');
   const before = await G(page, () => window.__game.game.s.order.danbing);
